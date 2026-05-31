@@ -54,7 +54,7 @@ jobs:
     - name: Install staticcheck
       run: go install honnef.co/go/tools/cmd/staticcheck@v0.6.1
     - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@1481404843c368bc19ca9406f87d6e0fc97bdcfd # v7.0.0
+      uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
       with:
         version: v2.8.0
         args: --timeout=10m
