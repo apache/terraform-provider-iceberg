@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-module github.com/apache/iceberg-terraform
+module github.com/apache/terraform-provider-iceberg
 
 go 1.25.1
 
