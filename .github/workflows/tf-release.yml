@@ -1,0 +1,133 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Builds release-candidate artifacts when a version tag is pushed.
+#
+# It produces two downloadable artifacts, mirroring the PyIceberg release flow:
+#
+#   * svn-release-candidate-<version>  -- the Apache *source* tarball. This is
+#     the official artifact the PMC votes on. The release manager signs it
+#     locally (.asc + .sha512) and uploads it to the Apache dev SVN.
+#
+#   * registry-release-candidate-<version> -- the cross-platform provider
+#     binaries (zips), SHA256SUMS, and registry manifest built by GoReleaser.
+#     These are the *convenience binaries* for the Terraform/OpenTofu
+#     registries. They are NOT published here; after the vote passes the
+#     release manager signs the checksums locally and attaches everything to a
+#     GitHub Release, which the registries then ingest.
+#
+# No signing or publishing happens in CI -- all GPG signing is done by the
+# release manager with their KEYS-registered key (see dev/release/README.md).
+
+name: Terraform Build Release Candidate
+
+on:
+  push:
+    tags:
+      # Matches final tags (v0.7.0) and release candidates (v0.7.0-rc1).
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  source-release:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Strip the leading "v"; e.g. v0.7.0-rc1 -> 0.7.0-rc1
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build source tarball
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          PREFIX="apache-iceberg-terraform-${VERSION}"
+          git archive --format=tar.gz --prefix="${PREFIX}/" \
+            -o "${PREFIX}.tar.gz" HEAD
+          sha512sum "${PREFIX}.tar.gz"
+
+      - name: Upload source artifact (for Apache dev SVN)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: svn-release-candidate-${{ steps.version.outputs.version }}
+          path: apache-iceberg-terraform-*.tar.gz
+          if-no-files-found: error
+
+  binary-release:
+    name: Build provider binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version: '1.25.1'
+          cache: false
+          cache-dependency-path: go.sum
+
+      - name: Build artifacts with GoReleaser
+        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
+        with:
+          version: '~> v2'
+          # Build the zips + SHA256SUMS, but do not GPG-sign and do not create a
+          # GitHub Release. Signing and publishing are done by the release
+          # manager (see dev/release/README.md).
+          args: release --clean --skip=sign,publish
+
+      - name: Stage registry manifest
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # GoReleaser includes the manifest in SHA256SUMS, but only copies the
+          # renamed file into dist/ during the (skipped) publish stage. Stage it
+          # here so the registry-required manifest ships in the artifact. The
+          # content is identical to the file hashed in SHA256SUMS, so the
+          # checksum still verifies.
+          cp terraform-registry-manifest.json \
+            "dist/terraform-provider-iceberg_${VERSION}_manifest.json"
+
+      - name: Upload registry artifact (convenience binaries)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-release-candidate-${{ steps.version.outputs.version }}
+          path: |
+            dist/*.zip
+            dist/*_SHA256SUMS
+            dist/*_manifest.json
+          if-no-files-found: error

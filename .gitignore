@@ -18,6 +18,10 @@ dev.tfrc
 build/
 lib/
 
+# release artifacts
+dist/
+apache-iceberg-terraform-*.tar.gz
+
 # intellij files
 .idea/
 .idea_modules/

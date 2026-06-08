@@ -1,0 +1,92 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# GoReleaser configuration for the Iceberg Terraform provider.
+#
+# This produces the *convenience binaries* consumed by the Terraform Registry
+# (registry.terraform.io/apache/iceberg) and the OpenTofu Registry. It is NOT
+# the official Apache release artifact -- that is the source tarball that is
+# voted on (see dev/release/README.md).
+#
+# The official binary layout required by the registries is documented at
+# https://developer.hashicorp.com/terraform/registry/providers/publishing
+#
+# Signing of the SHA256SUMS file is performed locally by the release manager
+# with their KEYS-registered GPG key, so the `signs` block below is skipped in
+# CI (`--skip=sign`). See dev/release/README.md for the manual signing step.
+version: 2
+
+# The Terraform Registry requires the binary and archives to be named
+# `terraform-provider-iceberg`. The upstream repo apache/terraform-provider-iceberg
+# already yields this name by default; pin it so a contributor's differently-named
+# fork still produces correct artifacts.
+project_name: terraform-provider-iceberg
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - '-s -w'
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+    # Only 64-bit targets: a transitive dependency (github.com/apache/thrift,
+    # pulled in via iceberg-go) uses math.MaxUint32 as an int, which overflows
+    # on 32-bit architectures, so 386/arm (32-bit) builds fail to compile.
+    goarch:
+      - amd64
+      - arm64
+    binary: '{{ .ProjectName }}_v{{ .Version }}'
+
+archives:
+  - formats: [zip]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+
+signs:
+  - artifacts: checksum
+    args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+
+release:
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+
+changelog:
+  disable: true

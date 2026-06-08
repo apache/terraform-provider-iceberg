@@ -20,4 +20,6 @@ LICENSE
 NOTICE
 go.sum
 build
+dist
 rat-results.txt
+terraform-registry-manifest.json
