@@ -29,31 +29,6 @@ The steps include:
 4. Publishing the Final Release (if the vote passes)
 5. Post-Release Steps
 
-## What gets released
-
-A Terraform provider has two distinct distribution channels, and it is important
-to keep them straight:
-
-* **The Apache source release.** A signed source tarball
-  (`apache-iceberg-terraform-<version>.tar.gz`) is the *official* artifact. It
-  is what the PMC votes on, what is archived in the Apache distribution SVN, and
-  the only thing the Apache release process formally governs. Everything below
-  serves this artifact.
-
-* **Convenience binaries.** Compiled, cross-platform provider binaries are
-  published to the [Terraform Registry](https://registry.terraform.io/providers/apache/iceberg)
-  (`registry.terraform.io/apache/iceberg`) and the
-  [OpenTofu Registry](https://search.opentofu.org/provider/apache/iceberg).
-  These are the equivalent of PyPI wheels for a Python project: a convenience
-  for end users, built from the voted source, but not themselves the Apache
-  release. Both registries ingest a single signed GitHub Release, so publishing
-  to one GitHub Release reaches both.
-
-The release candidate build is produced by the
-[`Terraform Build Release Candidate`](../../.github/workflows/tf-release.yml)
-GitHub Action; everything else (signing, SVN, the vote, and the registry
-publish) is driven by the release manager from the commands in this document.
-
 ## Requirements
 
 * A GPG key must be registered and published in the
@@ -85,58 +60,18 @@ publish) is driven by the release manager from the commands in this document.
 
 ## Preparing for a Release
 
-### Remove Deprecated Attributes and Resources
-
-Before cutting a release candidate, remove anything that was marked deprecated
-for removal in this version. In a Terraform provider this means:
-
-* Schema attributes carrying a `DeprecationMessage`, and resources/data sources
-  carrying a `DeprecationMessage`, whose planned removal version is the one being
-  released.
-* Any Go symbols annotated with a `// Deprecated:` comment that were scheduled
-  for removal in this version.
-
-Update the corresponding documentation under `docs/` and the examples under
-`examples/` so they no longer reference the removed fields.
-
-### Regenerate the Provider Documentation
-
-The registry renders the Markdown under `docs/`. Regenerate it from the current
-schema and examples so the published docs match the released provider:
-
-```bash
-go generate ./...
-```
-
-Commit any changes. (If the provider does not yet wire up
-[`tfplugindocs`](https://github.com/hashicorp/terraform-plugin-docs) via
-`go:generate`, generate the docs with `tfplugindocs generate` and review the
-diff by hand.)
-
-### Confirm the Provider Address
-
-The provider's published address is set in [`main.go`](../../main.go):
-
-```go
-const ADDRESS = "registry.terraform.io/apache/iceberg"
-```
-
-This must match the Terraform Registry namespace. It should already be correct;
-verify it before tagging.
+## Publishing a Release Candidate (RC)
 
 ### Versioning
 
-The provider version is carried entirely by the **git tag** — there is no
-version string to bump in a source file (unlike `pyproject.toml` for PyIceberg).
-The Terraform Registry derives the version from the release tag, and GoReleaser
-derives the artifact names from it. You therefore only choose the version when
-you create the tag, below.
+The **git tag** carries the version. There is no version string to bump in a
+source file (unlike `pyproject.toml` for PyIceberg) — the registry and GoReleaser
+both derive the version from the tag. You choose the version when you create the
+tag, below.
 
-Provider versions follow [semantic versioning](https://semver.org/) with a `v`
-prefix (`v0.7.0`). Release candidates use a `-rcN` pre-release suffix
-(`v0.7.0-rc1`).
+Versions follow [semantic versioning](https://semver.org/) with a `v` prefix
+(`v0.7.0`). Release candidates add a `-rcN` suffix (`v0.7.0-rc1`).
 
-## Publishing a Release Candidate (RC)
 
 ### Release Types
 
@@ -188,11 +123,7 @@ export RC=1
 
 export VERSION_WITH_RC=${VERSION}-rc${RC}
 export GIT_TAG=v${VERSION_WITH_RC}        # e.g. v0.7.0-rc1
-```
 
-Create a signed tag and push it:
-
-```bash
 git tag -s ${GIT_TAG} -m "Apache Iceberg Terraform provider ${VERSION_WITH_RC}"
 git push git@github.com:apache/terraform-provider-iceberg.git ${GIT_TAG}
 ```
@@ -204,19 +135,18 @@ GitHub Action runs automatically when the tag is pushed.
 
 It produces two artifacts:
 
-* `svn-release-candidate-${VERSION_WITH_RC}` — the Apache source tarball
+* `svn-release-candidate-${VERSION_WITH_RC}` — the source tarball
   (`apache-iceberg-terraform-${VERSION_WITH_RC}.tar.gz`), built with
-  `git archive` so it is exactly the tagged source tree. **This is the artifact
-  the PMC votes on.**
-* `registry-release-candidate-${VERSION_WITH_RC}` — the cross-platform provider
-  binaries (`.zip` per OS/arch), the `terraform-provider-iceberg_<version>_SHA256SUMS`
-  checksum file, and the `terraform-provider-iceberg_<version>_manifest.json`
-  registry manifest, built by GoReleaser. These are the convenience binaries.
-  Only 64-bit targets (`amd64`, `arm64`) are built for linux/darwin/windows/freebsd:
-  a transitive dependency (`github.com/apache/thrift`, via `iceberg-go`) does not
-  compile on 32-bit architectures. See [`.goreleaser.yml`](../../.goreleaser.yml).
+  `git archive` from the tagged source tree. **This is what the PMC votes on.**
+* `registry-release-candidate-${VERSION_WITH_RC}` — the convenience binaries
+  built by GoReleaser: a `.zip` per OS/arch, the
+  `terraform-provider-iceberg_<version>_SHA256SUMS` checksum file, and the
+  `terraform-provider-iceberg_<version>_manifest.json` registry manifest. Only
+  64-bit targets (`amd64`, `arm64`) are built for linux/darwin/windows/freebsd —
+  a dependency (`github.com/apache/thrift`, via `iceberg-go`) does not compile on
+  32-bit. See [`.goreleaser.yml`](../../.goreleaser.yml).
 
-Neither artifact is signed or published by CI — you do that locally below.
+CI neither signs nor publishes either artifact — you do that locally below.
 
 Watch the build with `gh`:
 
@@ -242,21 +172,15 @@ gh run download $RUN_ID --repo apache/terraform-provider-iceberg
 
 ### Publish Release Candidate (RC)
 
-The entire RC — both the source tarball and the convenience binaries — is staged
-in the Apache **dev** SVN. Nothing is published to the Terraform/OpenTofu
-registries until the vote passes.
-
 #### Sign and Generate Checksums
 
-Navigate into the downloaded artifact directories and, for every artifact,
-generate:
+For every artifact, generate:
 
-* `.asc` files: GPG-signed (detached, armored) signatures, to prove authenticity.
-* `.sha512` files: SHA-512 checksums, to verify integrity.
+* a `.asc` file: a detached, armored GPG signature (proves authenticity).
+* a `.sha512` file: a SHA-512 checksum (verifies integrity).
 
-For the convenience binaries the registry additionally needs a detached
-signature over the `SHA256SUMS` file (the registry verifies that one file and
-trusts the checksums inside it).
+The registry also needs a detached signature over the `SHA256SUMS` file. It
+verifies that one signature and trusts the checksums listed inside.
 
 ```bash
 : "${VERSION_WITH_RC:?ERROR: VERSION_WITH_RC is not set or is empty}"
@@ -269,24 +193,10 @@ trusts the checksums inside it).
         shasum -a 512 "${name}" > "${name}.sha512"
     done
 )
-
-# Convenience binaries (for end users / the registry).
-(
-    cd registry-release-candidate-${VERSION_WITH_RC}
-    # Detached signature over the checksums file, as the registry expects.
-    for sums in *_SHA256SUMS; do
-        gpg --yes --detach-sign --output "${sums}.sig" "${sums}"
-    done
-    # Belt-and-suspenders .asc/.sha512 for the zips while they live in SVN.
-    for name in *.zip; do
-        gpg --yes --armor --output "${name}.asc" --detach-sig "${name}"
-        shasum -a 512 "${name}" > "${name}.sha512"
-    done
-)
 ```
 
-The parentheses `()` create a subshell, so the `cd` does not change the
-directory in your parent shell.
+The parentheses run each block in a subshell, so `cd` does not affect your
+current directory.
 
 #### Upload Artifacts to Apache Dev SVN
 
@@ -387,8 +297,8 @@ If there are concerns with the RC, address the issues and generate another RC
 
 ## Publish the Final Release (Vote has passed)
 
-A minimum of 3 binding +1 votes is required to pass an RC. Once the vote has
-passed, close the vote thread by concluding it:
+An RC passes with at least 3 binding +1 votes. Once it passes, close the vote
+thread:
 
 ```text
 Thanks everyone for voting! The 72 hours have passed, and a minimum of 3 binding
@@ -408,7 +318,7 @@ Kind regards,
 ### Create the Final Tag
 
 The registries publish from a final (non-pre-release) tag. Create a signed
-`vVERSION` tag on the exact commit that was voted on:
+`vVERSION` tag on the commit that was voted on:
 
 ```bash
 : "${VERSION:?ERROR: VERSION is not set or is empty}"
@@ -423,13 +333,12 @@ git push git@github.com:apache/terraform-provider-iceberg.git ${RELEASE_TAG}
 
 ### Move the Accepted RC to the Apache Release SVN
 
-<!-- Only a PMC member can upload to the SVN release dist. -->
 > **Note:** Only a PMC member has permission to upload an artifact to the SVN
 > release dist.
 
 Promote the **source** artifact from `dev` to `release`. Only the source release
-is hosted in the Apache release SVN — the binaries are convenience artifacts and
-live on the GitHub Release / registries.
+lives in the Apache release SVN; the binaries are convenience artifacts hosted on
+the GitHub Release and registries.
 
 ```bash
 : "${VERSION_WITH_RC:?ERROR: VERSION_WITH_RC is not set or is empty}"
@@ -447,7 +356,7 @@ Verify the artifact is uploaded to
 
 ### Remove Old Artifacts From Apache Release SVN
 
-We only host the latest release. Clean up old release artifacts:
+Only the latest release is hosted. Clean up old release artifacts:
 
 ```bash
 svn delete https://dist.apache.org/repos/dist/release/iceberg/iceberg-terraform-<OLD_RELEASE_VERSION> \
@@ -463,13 +372,12 @@ svn delete https://dist.apache.org/repos/dist/dev/iceberg/iceberg-terraform-${VE
 
 ### Publish the Convenience Binaries
 
-The Terraform and OpenTofu registries both ingest a GitHub Release. Publish the
-**already-voted, already-signed** binaries from the RC — do not rebuild them, so
-that what users install is bit-for-bit what was voted on.
+Both registries ingest a GitHub Release. Publish the **already-voted,
+already-signed** binaries from the RC — do not rebuild them, so what users install
+is bit-for-bit what was voted on.
 
-Gather the binaries you downloaded and signed during the RC (the
-`registry-release-candidate-${VERSION_WITH_RC}` directory), then create the
-GitHub Release on the final tag and attach them:
+Using the `registry-release-candidate-${VERSION_WITH_RC}` directory you signed
+during the RC, create the GitHub Release on the final tag and attach the files:
 
 ```bash
 : "${VERSION:?ERROR: VERSION is not set or is empty}"
@@ -495,10 +403,10 @@ gh release create ${RELEASE_TAG} \
 
 Within a few minutes the
 [Terraform Registry](https://registry.terraform.io/providers/apache/iceberg) and
-[OpenTofu Registry](https://search.opentofu.org/provider/apache/iceberg) will
-detect the release and publish the new version. Verify the version appears and
-that a fresh `terraform init` against a configuration pinning the new version
-succeeds.
+[OpenTofu Registry](https://search.opentofu.org/provider/apache/iceberg) detect
+the release and publish the new version. Verify it appears, then run
+`terraform init` against a configuration pinning the new version to confirm it
+installs.
 
 ## Post Release
 
@@ -529,10 +437,9 @@ Thanks to everyone for contributing!
 ### Create a GitHub Release Note
 
 The `gh release create` step above already created the GitHub Release. Open it
-in the browser and use **Generate release notes** (selecting the previous
-release tag as the **Previous tag**) to populate the changelog, set it as the
-latest release, and update the notes. Check the `changelog` label on GitHub for
-anything that should be highlighted.
+in the browser, use **Generate release notes** (with the previous release tag as
+the **Previous tag**) to populate the changelog, and set it as the latest
+release. Check the `changelog` label on GitHub for anything worth highlighting.
 
 ### Update the GitHub Issue Template
 
@@ -566,8 +473,8 @@ go build ./...
 go test ./...
 ```
 
-A valid signature from a key in the `KEYS` file plus a matching checksum and a
-clean build/test is a `+1`.
+A valid signature from a key in the `KEYS` file, a matching checksum, and a clean
+build and test is a `+1`.
 
 ## Misc
 
