@@ -60,6 +60,8 @@ jobs:
         args: --timeout=10m
     - name: Lint
       run: staticcheck ./...
+    - name: Install Terraform
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
     - name: Run tests
       run: go test -v ./...
     - name: Run integration tests
