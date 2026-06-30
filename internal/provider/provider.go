@@ -235,6 +235,8 @@ func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 func (p *icebergProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewTableDataSource,
+		NewPolarisPrincipalRoleDataSource,
+		NewPolarisCatalogRoleDataSource,
 	}
 }
 
@@ -244,5 +246,10 @@ func (p *icebergProvider) Resources(_ context.Context) []func() resource.Resourc
 		NewNamespaceResource,
 		NewTableResource,
 		NewPolarisPrincipalResource,
+		NewPolarisPrincipalRoleResource,
+		NewPolarisPrincipalRoleAssignmentResource,
+		NewPolarisCatalogRoleResource,
+		NewPolarisCatalogRoleAssignmentResource,
+		NewPolarisGrantResource,
 	}
 }

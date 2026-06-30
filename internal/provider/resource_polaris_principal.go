@@ -111,6 +111,8 @@ func (r *polarisPrincipalResource) Configure(_ context.Context, req resource.Con
 			"Unexpected Resource Configure Type",
 			"Expected *icebergProvider, got a different type: %T. Please report this issue to the provider developers.",
 		)
+
+		return
 	}
 	r.provider = provider
 }
@@ -234,6 +236,12 @@ func (r *polarisPrincipalResource) Read(ctx context.Context, req resource.ReadRe
 		return
 	}
 
+	// Credential rotation flag is not returned by the API on GET.
+	// Preserve from state if available, otherwise default to false.
+	if data.CredentialRotationRequired.IsNull() || data.CredentialRotationRequired.IsUnknown() {
+		data.CredentialRotationRequired = types.BoolValue(false)
+	}
+
 	// Update properties; credentials are not returned on GET so keep from state.
 	if len(principal.Properties) > 0 {
 		propsVal, diags := types.MapValueFrom(ctx, types.StringType, principal.Properties)
@@ -323,6 +331,13 @@ func (r *polarisPrincipalResource) Update(ctx context.Context, req resource.Upda
 	} else {
 		state.Properties = types.MapNull(types.StringType)
 	}
+
+	// Credential rotation flag not returned by API on update — preserve from plan
+	val := false
+	if !plan.CredentialRotationRequired.IsNull() && !plan.CredentialRotationRequired.IsUnknown() {
+		val = plan.CredentialRotationRequired.ValueBool()
+	}
+	state.CredentialRotationRequired = types.BoolValue(val)
 
 	// Polaris doesn't return credentials on update, and setting the secret requires
 	// a dedicated resetCredentials call after create. Preserve everything from state.

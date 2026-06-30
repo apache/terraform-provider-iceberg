@@ -30,12 +30,19 @@ Use Terraform to interact with Iceberg REST Catalog instances.
 ## Data Sources
 
 - [iceberg_table](data-sources/table.md) — Read metadata for an existing table from the catalog.
+- [iceberg_polaris_principal_role](data-sources/polaris_principal_role.md) — Look up a Polaris principal role by name.
+- [iceberg_polaris_catalog_role](data-sources/polaris_catalog_role.md) — Look up a Polaris catalog role by name and catalog.
 
 ## Resources
 
 - [iceberg_namespace](resources/namespace.md) — Manage a catalog namespace.
 - [iceberg_table](resources/table.md) — Manage an Iceberg table.
 - [iceberg_polaris_principal](resources/polaris_principal.md) — Manage a Polaris principal (Polaris deployments).
+- [iceberg_polaris_principal_role](resources/polaris_principal_role.md) — Manage a Polaris principal role.
+- [iceberg_polaris_principal_role_assignment](resources/polaris_principal_role_assignment.md) — Assign a principal role to a Polaris principal.
+- [iceberg_polaris_catalog_role](resources/polaris_catalog_role.md) — Manage a Polaris catalog role.
+- [iceberg_polaris_catalog_role_assignment](resources/polaris_catalog_role_assignment.md) — Assign a catalog role to a principal role.
+- [iceberg_polaris_grant](resources/polaris_grant.md) — Grant a privilege on a securable object to a catalog role.
 
 ## Schema
 

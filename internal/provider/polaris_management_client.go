@@ -195,3 +195,223 @@ func (c *polarisManagementClient) UpdatePrincipal(ctx context.Context, name stri
 func (c *polarisManagementClient) DeletePrincipal(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/principals/"+url.PathEscape(name), nil, nil, nil)
 }
+
+// ─── Principal Roles ──────────────────────────────────────────────────────
+
+type polarisPrincipalRole struct {
+	Name                string            `json:"name"`
+	Federated           bool              `json:"federated,omitempty"`
+	Properties          map[string]string `json:"properties,omitempty"`
+	EntityVersion       int64             `json:"entityVersion,omitempty"`
+	CreateTimestamp     int64             `json:"createTimestamp,omitempty"`
+	LastUpdateTimestamp int64             `json:"lastUpdateTimestamp,omitempty"`
+}
+
+type polarisCreatePrincipalRoleRequest struct {
+	PrincipalRole polarisPrincipalRole `json:"principalRole"`
+}
+
+type polarisUpdatePrincipalRoleRequest struct {
+	CurrentEntityVersion int64             `json:"currentEntityVersion"`
+	Properties           map[string]string `json:"properties,omitempty"`
+}
+
+type polarisPrincipalRoles struct {
+	Roles []polarisPrincipalRole `json:"roles"`
+}
+
+func (c *polarisManagementClient) CreatePrincipalRole(ctx context.Context, req polarisCreatePrincipalRoleRequest) (*polarisPrincipalRole, error) {
+	var out polarisPrincipalRole
+	if err := c.do(ctx, http.MethodPost, "/principal-roles", nil, req, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (c *polarisManagementClient) GetPrincipalRole(ctx context.Context, name string) (*polarisPrincipalRole, error) {
+	var out polarisPrincipalRole
+	if err := c.do(ctx, http.MethodGet, "/principal-roles/"+url.PathEscape(name), nil, nil, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (c *polarisManagementClient) UpdatePrincipalRole(ctx context.Context, name string, req polarisUpdatePrincipalRoleRequest) (*polarisPrincipalRole, error) {
+	var out polarisPrincipalRole
+	if err := c.do(ctx, http.MethodPut, "/principal-roles/"+url.PathEscape(name), nil, req, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (c *polarisManagementClient) DeletePrincipalRole(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/principal-roles/"+url.PathEscape(name), nil, nil, nil)
+}
+
+func (c *polarisManagementClient) ListPrincipalRoles(ctx context.Context) (*polarisPrincipalRoles, error) {
+	var out polarisPrincipalRoles
+	if err := c.do(ctx, http.MethodGet, "/principal-roles", nil, nil, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+// ─── Principal Role Assignments ───────────────────────────────────────────
+
+type polarisPrincipalRoleAssignment struct {
+	PrincipalRoleName string `json:"-"`
+}
+
+func (c *polarisManagementClient) AssignPrincipalRole(ctx context.Context, principalName string, roleName string) error {
+	body := map[string]any{
+		"principalRole": map[string]string{"name": roleName},
+	}
+
+	return c.do(ctx, http.MethodPut, "/principals/"+url.PathEscape(principalName)+"/principal-roles", nil, body, nil)
+}
+
+func (c *polarisManagementClient) ListPrincipalRoleAssignments(ctx context.Context, principalName string) (*polarisPrincipalRoles, error) {
+	var out polarisPrincipalRoles
+	if err := c.do(ctx, http.MethodGet, "/principals/"+url.PathEscape(principalName)+"/principal-roles", nil, nil, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (c *polarisManagementClient) RevokePrincipalRole(ctx context.Context, principalName string, roleName string) error {
+	return c.do(ctx, http.MethodDelete, "/principals/"+url.PathEscape(principalName)+"/principal-roles/"+url.PathEscape(roleName), nil, nil, nil)
+}
+
+// ─── Catalog Roles ────────────────────────────────────────────────────────
+
+type polarisCatalogRole struct {
+	Name                string            `json:"name"`
+	Properties          map[string]string `json:"properties,omitempty"`
+	EntityVersion       int64             `json:"entityVersion,omitempty"`
+	CreateTimestamp     int64             `json:"createTimestamp,omitempty"`
+	LastUpdateTimestamp int64             `json:"lastUpdateTimestamp,omitempty"`
+}
+
+type polarisCreateCatalogRoleRequest struct {
+	CatalogRole polarisCatalogRole `json:"catalogRole"`
+}
+
+type polarisUpdateCatalogRoleRequest struct {
+	CurrentEntityVersion int64             `json:"currentEntityVersion"`
+	Properties           map[string]string `json:"properties,omitempty"`
+}
+
+type polarisCatalogRoles struct {
+	Roles []polarisCatalogRole `json:"roles"`
+}
+
+func (c *polarisManagementClient) CreateCatalogRole(ctx context.Context, catalogName string, req polarisCreateCatalogRoleRequest) (*polarisCatalogRole, error) {
+	var out polarisCatalogRole
+	if err := c.do(ctx, http.MethodPost, "/catalogs/"+url.PathEscape(catalogName)+"/catalog-roles", nil, req, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (c *polarisManagementClient) GetCatalogRole(ctx context.Context, catalogName, roleName string) (*polarisCatalogRole, error) {
+	var out polarisCatalogRole
+	if err := c.do(ctx, http.MethodGet, "/catalogs/"+url.PathEscape(catalogName)+"/catalog-roles/"+url.PathEscape(roleName), nil, nil, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (c *polarisManagementClient) UpdateCatalogRole(ctx context.Context, catalogName, roleName string, req polarisUpdateCatalogRoleRequest) (*polarisCatalogRole, error) {
+	var out polarisCatalogRole
+	if err := c.do(ctx, http.MethodPut, "/catalogs/"+url.PathEscape(catalogName)+"/catalog-roles/"+url.PathEscape(roleName), nil, req, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (c *polarisManagementClient) DeleteCatalogRole(ctx context.Context, catalogName, roleName string) error {
+	return c.do(ctx, http.MethodDelete, "/catalogs/"+url.PathEscape(catalogName)+"/catalog-roles/"+url.PathEscape(roleName), nil, nil, nil)
+}
+
+func (c *polarisManagementClient) ListCatalogRoles(ctx context.Context, catalogName string) (*polarisCatalogRoles, error) {
+	var out polarisCatalogRoles
+	if err := c.do(ctx, http.MethodGet, "/catalogs/"+url.PathEscape(catalogName)+"/catalog-roles", nil, nil, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+// ─── Catalog Role Assignments (map catalog role to principal role) ────────
+
+func (c *polarisManagementClient) AssignCatalogRoleToPrincipalRole(ctx context.Context, principalRoleName, catalogName, catalogRoleName string) error {
+	body := map[string]any{
+		"catalogRole": map[string]string{"name": catalogRoleName},
+	}
+
+	return c.do(ctx, http.MethodPut, "/principal-roles/"+url.PathEscape(principalRoleName)+"/catalog-roles/"+url.PathEscape(catalogName), nil, body, nil)
+}
+
+func (c *polarisManagementClient) ListCatalogRoleAssignments(ctx context.Context, principalRoleName, catalogName string) (*polarisCatalogRoles, error) {
+	var out polarisCatalogRoles
+	if err := c.do(ctx, http.MethodGet, "/principal-roles/"+url.PathEscape(principalRoleName)+"/catalog-roles/"+url.PathEscape(catalogName), nil, nil, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (c *polarisManagementClient) RevokeCatalogRoleFromPrincipalRole(ctx context.Context, principalRoleName, catalogName, catalogRoleName string) error {
+	return c.do(ctx, http.MethodDelete, "/principal-roles/"+url.PathEscape(principalRoleName)+"/catalog-roles/"+url.PathEscape(catalogName)+"/"+url.PathEscape(catalogRoleName), nil, nil, nil)
+}
+
+// ─── Grants ───────────────────────────────────────────────────────────────
+
+type polarisGrantResourceBody struct {
+	Type      string   `json:"type"`
+	Privilege string   `json:"privilege"`
+	Namespace []string `json:"namespace,omitempty"`
+	TableName string   `json:"tableName,omitempty"`
+	ViewName  string   `json:"viewName,omitempty"`
+}
+
+type polarisAddGrantRequest struct {
+	Grant polarisGrantResourceBody `json:"grant"`
+}
+
+type polarisGrantResources struct {
+	Grants []polarisGrantResourceBody `json:"grants"`
+}
+
+func (c *polarisManagementClient) AddGrant(ctx context.Context, catalogName, catalogRoleName string, grant polarisGrantResourceBody) error {
+	body := polarisAddGrantRequest{Grant: grant}
+
+	return c.do(ctx, http.MethodPut, "/catalogs/"+url.PathEscape(catalogName)+"/catalog-roles/"+url.PathEscape(catalogRoleName)+"/grants", nil, body, nil)
+}
+
+func (c *polarisManagementClient) ListGrants(ctx context.Context, catalogName, catalogRoleName string) (*polarisGrantResources, error) {
+	var out polarisGrantResources
+	if err := c.do(ctx, http.MethodGet, "/catalogs/"+url.PathEscape(catalogName)+"/catalog-roles/"+url.PathEscape(catalogRoleName)+"/grants", nil, nil, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (c *polarisManagementClient) RevokeGrant(ctx context.Context, catalogName, catalogRoleName string, grant polarisGrantResourceBody, cascade bool) error {
+	q := url.Values{}
+	if cascade {
+		q.Set("cascade", "true")
+	}
+	body := polarisAddGrantRequest{Grant: grant}
+
+	return c.do(ctx, http.MethodPost, "/catalogs/"+url.PathEscape(catalogName)+"/catalog-roles/"+url.PathEscape(catalogRoleName)+"/grants", q, body, nil)
+}
