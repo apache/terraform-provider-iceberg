@@ -15,31 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Builds release-candidate artifacts when a version tag is pushed.
-#
-# It produces two downloadable artifacts, mirroring the PyIceberg release flow:
-#
-#   * svn-release-candidate-<version>  -- the Apache *source* tarball. This is
-#     the official artifact the PMC votes on. The release manager signs it
-#     locally (.asc + .sha512) and uploads it to the Apache dev SVN.
-#
-#   * registry-release-candidate-<version> -- the cross-platform provider
-#     binaries (zips), SHA256SUMS, and registry manifest built by GoReleaser.
-#     These are the *convenience binaries* for the Terraform/OpenTofu
-#     registries. They are NOT published here; after the vote passes the
-#     release manager signs the checksums locally and attaches everything to a
-#     GitHub Release, which the registries then ingest.
-#
-# No signing or publishing happens in CI -- all GPG signing is done by the
-# release manager with their KEYS-registered key (see dev/release/README.md).
+# On a release-candidate tag (e.g. v0.7.0-rc1), builds the source tarball and
+# convenience binaries and publishes them as a GitHub prerelease. The release
+# manager drives the rest from dev/release/release_rc.sh (see docs/releasing.md);
+# CI never signs.
 
 name: Terraform Build Release Candidate
 
 on:
   push:
     tags:
-      # Matches final tags (v0.7.0) and release candidates (v0.7.0-rc1).
-      - 'v*'
+      # RC tags only; the final vX.Y.Z tag is published by release.sh.
+      - 'v*-rc*'
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -59,23 +50,30 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          # Strip the leading "v"; e.g. v0.7.0-rc1 -> 0.7.0-rc1
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          # v0.7.0-rc1 -> version=0.7.0, rc=1
+          version=${TAG#v}
+          version=${version%-rc*}
+          rc=${TAG##*-rc}
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "rc=${rc}" >> "$GITHUB_OUTPUT"
 
       - name: Build source tarball
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          RC: ${{ steps.version.outputs.rc }}
         run: |
-          PREFIX="apache-iceberg-terraform-${VERSION}"
-          git archive --format=tar.gz --prefix="${PREFIX}/" \
-            -o "${PREFIX}.tar.gz" HEAD
-          sha512sum "${PREFIX}.tar.gz"
+          # -rc in the filename, but unpacks to a dir without it so the tree
+          # matches the final release.
+          dir="apache-iceberg-terraform-${VERSION}"
+          tar_gz="apache-iceberg-terraform-${VERSION}-rc${RC}.tar.gz"
+          git archive --format=tar.gz --prefix="${dir}/" -o "${tar_gz}" HEAD
+          sha512sum "${tar_gz}" > "${tar_gz}.sha512"
 
-      - name: Upload source artifact (for Apache dev SVN)
+      - name: Upload source artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: svn-release-candidate-${{ steps.version.outputs.version }}
-          path: apache-iceberg-terraform-*.tar.gz
+          name: source-release-candidate
+          path: apache-iceberg-terraform-*.tar.gz*
           if-no-files-found: error
 
   binary-release:
@@ -92,7 +90,9 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          version=${TAG#v}
+          version=${version%-rc*}
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
@@ -105,29 +105,67 @@ jobs:
         uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
         with:
           version: '~> v2'
-          # Build the zips + SHA256SUMS, but do not GPG-sign and do not create a
-          # GitHub Release. Signing and publishing are done by the release
-          # manager (see dev/release/README.md).
-          args: release --clean --skip=sign,publish
+          # Build only; signing and publishing happen later.
+          args: release --clean --skip=sign,publish,validate
+        env:
+          # Name artifacts with the final version (0.7.0, not 0.7.0-rc1) so the
+          # voted binaries can be promoted unchanged. Skipping validate lets this
+          # override GoReleaser's tag-derived version.
+          GORELEASER_CURRENT_TAG: v${{ steps.version.outputs.version }}
 
       - name: Stage registry manifest
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # GoReleaser includes the manifest in SHA256SUMS, but only copies the
-          # renamed file into dist/ during the (skipped) publish stage. Stage it
-          # here so the registry-required manifest ships in the artifact. The
-          # content is identical to the file hashed in SHA256SUMS, so the
-          # checksum still verifies.
+          # GoReleaser hashes the manifest into SHA256SUMS but only copies it to
+          # dist/ during the skipped publish stage, so stage it here.
           cp terraform-registry-manifest.json \
             "dist/terraform-provider-iceberg_${VERSION}_manifest.json"
 
-      - name: Upload registry artifact (convenience binaries)
+      - name: Upload binary artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: registry-release-candidate-${{ steps.version.outputs.version }}
+          name: binary-release-candidate
           path: |
             dist/*.zip
             dist/*_SHA256SUMS
             dist/*_manifest.json
           if-no-files-found: error
+
+  create-prerelease:
+    name: Create GitHub prerelease
+    needs:
+      - source-release
+      - binary-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download source artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: source-release-candidate
+          path: artifacts
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: binary-release-candidate
+          path: artifacts
+
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # release_rc.sh adds signatures afterwards; CI never signs.
+          gh release create "${TAG}" \
+            --prerelease \
+            --verify-tag \
+            --title "Apache Iceberg Terraform provider ${TAG}" \
+            --generate-notes \
+            artifacts/*
