@@ -66,30 +66,5 @@ services:
       tail -f /dev/null
       "
 
-  polaris:
-    image: apache/polaris:1.3.0-incubating
-    container_name: polaris
-    networks:
-      iceberg_net:
-    ports:
-      - "8191:8181"
-      - "8192:8182"
-    environment:
-      - AWS_REGION=us-east-1
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
-      - POLARIS_BOOTSTRAP_CREDENTIALS=POLARIS,root,s3cr3t
-      - polaris.realm-context.realms=POLARIS
-      - quarkus.otel.sdk.disabled=true
-      - polaris.features."ALLOW_INSECURE_STORAGE_TYPES"=true
-      - polaris.features."SUPPORTED_CATALOG_STORAGE_TYPES"=["FILE","S3","GCS","AZURE"]
-      - polaris.readiness.ignore-severe-issues=true
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8182/q/health"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
 networks:
   iceberg_net:

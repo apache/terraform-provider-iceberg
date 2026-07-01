@@ -38,15 +38,6 @@ Use Terraform to interact with Iceberg REST Catalog instances.
 ### Optional
 
 - `headers` (Map of String, Sensitive) The headers to use for authentication.
-- `polaris_settings` (Block, Optional) Settings specific to Polaris when type = 'polaris'. (see [below for nested schema](#nestedblock--polaris_settings))
 - `token` (String, Sensitive) The token to use for authentication.
-- `type` (String) The type of catalog. Use 'rest' for a plain REST catalog, or 'polaris' for Polaris (REST catalog with Polaris management).
+- `type` (String) The type of catalog. Use 'rest' for a plain REST catalog.
 - `warehouse` (String) The warehouse to use for the Iceberg REST catalog. This will be passed as `warehouse` property in the catalog properties.
-
-<a id="nestedblock--polaris_settings"></a>
-### Nested Schema for `polaris_settings`
-
-Optional:
-
-- `catalog_name` (String) Default Polaris catalog name for RBAC resources.
-- `management_uri` (String) The base URI for the Polaris Management API. If omitted, it will be derived from catalog_uri by appending '/api/management/v1'.

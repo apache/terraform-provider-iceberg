@@ -20,9 +20,8 @@ test-integration-setup: ## Start Docker services for integration tests
 	docker compose -f dev/docker-compose.yml rm -f
 	docker compose -f dev/docker-compose.yml up -d --wait
 
-test-integration-exec: ## Run integration tests (Iceberg REST at 8181, Polaris at 8191)
-	POLARIS_TOKEN=$$(python3 dev/provision_polaris.py) && \
-	TF_ACC=1 ICEBERG_CATALOG_URI=http://localhost:8181 POLARIS_CATALOG_URI=http://localhost:8191 POLARIS_TOKEN="$$POLARIS_TOKEN" go test ./... -v
+test-integration-exec: ## Run integration tests (Iceberg REST at 8181)
+	TF_ACC=1 ICEBERG_CATALOG_URI=http://localhost:8181 go test ./... -v
 
 test-integration-cleanup: ## Clean up integration test environment
 	@if [ "${KEEP_COMPOSE}" != "1" ]; then \
