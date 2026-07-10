@@ -95,14 +95,22 @@ id="apache-iceberg-terraform-${version}-rc${rc}"
 if [ "${RELEASE_SIGN}" -gt 0 ]; then
   echo "Looking for the release workflow run on ${repository}:${rc_tag}"
   run_id=""
+  max_attempts=60 # 60 x 5s = 5 minutes
+  attempt=0
   while [ -z "${run_id}" ]; do
-    echo "Waiting for the run to start..."
+    attempt=$((attempt + 1))
+    if [ "${attempt}" -gt "${max_attempts}" ]; then
+      echo "Timed out after $((max_attempts * 5))s waiting for the tf-release.yml run on ${rc_tag}."
+      echo "Check: gh run list --repo ${repository} --workflow=tf-release.yml"
+      exit 1
+    fi
+    echo "Waiting for the run to start... (attempt ${attempt}/${max_attempts})"
     run_id=$(gh run list \
       --repo "${repository}" \
       --workflow=tf-release.yml \
       --json 'databaseId,event,headBranch,status' \
       --jq ".[] | select(.event == \"push\" and .headBranch == \"${rc_tag}\") | .databaseId")
-    sleep 5
+    [ -z "${run_id}" ] && sleep 5
   done
 
   echo "Found workflow run ${run_id}; waiting for it to finish..."

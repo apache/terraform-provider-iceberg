@@ -271,11 +271,17 @@ Reviewers validate a candidate with:
 
 The script imports the Apache Iceberg `KEYS`, downloads the source release from
 the dev SVN, verifies its GPG signature and SHA-512 checksum, runs the Apache
-RAT license check, and builds and tests the provider from source in a throwaway
-sandbox. Set `VERIFY_SIGN=0` or `VERIFY_RAT=0` to skip individual checks.
+RAT license check, verifies the convenience binaries against their signed
+`SHA256SUMS`, and builds and tests the provider from source in a throwaway
+sandbox.
+
+It expects `git`, `gpg`, `curl`, and `shasum`/`sha512sum` on your `PATH`.
+
+The RAT License check needs `java` and `unzip`, but can be sipped with `VERIFY_RAT=0`.
+Binary verification needs [`gh`](https://cli.github.com/) and can be skipped with `VERIFY_BINARY=0`.
 
 A valid signature from a key in the `KEYS` file, a matching checksum, a clean RAT
-check, and a clean build and test is a `+1`.
+check, verified binaries, and a clean build and test is a `+1`.
 
 ## Misc
 

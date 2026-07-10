@@ -49,11 +49,17 @@ ICEBERG_DIST_BASE_URL="https://downloads.apache.org/iceberg"
 DOWNLOAD_RC_BASE_URL="https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-terraform-${VERSION}-rc${RC}"
 ARCHIVE_BASE_NAME="apache-iceberg-terraform-${VERSION}"
 
+REPOSITORY="apache/terraform-provider-iceberg"
+RC_TAG="v${VERSION}-rc${RC}"
+# The convenience binaries and their SHA256SUMS are named with the final version.
+BINARY_BASE_NAME="terraform-provider-iceberg_${VERSION}"
+
 : "${VERIFY_DEFAULT:=1}"
 : "${VERIFY_DOWNLOAD:=${VERIFY_DEFAULT}}"
 : "${VERIFY_FORCE_USE_GO_BINARY:=0}"
 : "${VERIFY_SIGN:=${VERIFY_DEFAULT}}"
 : "${VERIFY_RAT:=${VERIFY_DEFAULT}}"
+: "${VERIFY_BINARY:=${VERIFY_DEFAULT}}"
 
 VERIFY_SUCCESS=no
 
@@ -101,8 +107,10 @@ import_gpg_keys() {
 
 if type shasum >/dev/null 2>&1; then
   sha512_verify="shasum -a 512 -c"
+  sha256_verify="shasum -a 256 -c"
 else
   sha512_verify="sha512sum -c"
+  sha256_verify="sha256sum -c"
 fi
 
 fetch_archive() {
@@ -117,6 +125,28 @@ fetch_archive() {
 
 ensure_source_directory() {
   tar xf "${ARCHIVE_BASE_NAME}".tar.gz
+}
+
+verify_binary_distribution() {
+  if [ "${VERIFY_BINARY}" -le 0 ]; then
+    return
+  fi
+  # TF Registry consumes convenience binaries.
+  # These lives on GitHub prerelease, not dev SVN.
+  local binary_dir="binaries"
+  rm -rf "${binary_dir}"
+  mkdir -p "${binary_dir}"
+  gh release download "${RC_TAG}" \
+    --repo "${REPOSITORY}" \
+    --dir "${binary_dir}" \
+    --pattern "${BINARY_BASE_NAME}_*"
+  (
+    cd "${binary_dir}"
+    if [ "${VERIFY_SIGN}" -gt 0 ]; then
+      gpg --verify "${BINARY_BASE_NAME}_SHA256SUMS.sig" "${BINARY_BASE_NAME}_SHA256SUMS"
+    fi
+    ${sha256_verify} "${BINARY_BASE_NAME}_SHA256SUMS"
+  )
 }
 
 latest_go_version() {
@@ -210,6 +240,7 @@ cd "${VERIFY_TMPDIR}"
 
 import_gpg_keys
 fetch_archive
+verify_binary_distribution
 ensure_source_directory
 ensure_go
 pushd "${ARCHIVE_BASE_NAME}"
