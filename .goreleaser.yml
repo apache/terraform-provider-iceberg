@@ -38,7 +38,7 @@ project_name: terraform-provider-iceberg
 
 before:
   hooks:
-    - go mod tidy
+    - go mod download
 
 builds:
   - env:
