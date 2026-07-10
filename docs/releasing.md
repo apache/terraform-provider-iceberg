@@ -277,7 +277,7 @@ sandbox.
 
 It expects `git`, `gpg`, `curl`, and `shasum`/`sha512sum` on your `PATH`.
 
-The RAT License check needs `java` and `unzip`, but can be sipped with `VERIFY_RAT=0`.
+The RAT License check needs `java` and `unzip`, but can be skipped with `VERIFY_RAT=0`.
 Binary verification needs [`gh`](https://cli.github.com/) and can be skipped with `VERIFY_BINARY=0`.
 
 A valid signature from a key in the `KEYS` file, a matching checksum, a clean RAT
