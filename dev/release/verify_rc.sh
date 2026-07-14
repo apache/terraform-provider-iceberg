@@ -65,6 +65,7 @@ VERIFY_SUCCESS=no
 
 setup_tmpdir() {
   cleanup() {
+    go clean -modcache || :
     if [ "${VERIFY_SUCCESS}" = "yes" ]; then
       rm -rf "${VERIFY_TMPDIR}"
     else
