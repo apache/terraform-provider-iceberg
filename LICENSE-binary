@@ -292,17 +292,22 @@ github.com/hashicorp/yamux
 
 
 ------------------------------------------------------------------------------------
-Some bundled components carry code under a license other than the one their
-module is distributed under. Only those portions are listed here; each is
-covered by the license text of the same name in licenses-binary/.
+Some bundled components carry code under a license other than the one their own
+module is distributed under. Only those portions are listed here; their license
+texts are also in licenses-binary/.
 
 BSD 3-Clause
 ------------
 arrow/flight/cookie_middleware.go, in github.com/apache/arrow-go/v18
-  (from the Go project)
 internal/sync/singleflight, in github.com/aws/aws-sdk-go-v2
 internal/sync/singleflight, in github.com/aws/smithy-go
+encoding/xml/element.go, in github.com/aws/smithy-go
+encoding/xml/escape.go, in github.com/aws/smithy-go
+encoding/json/escape.go, in github.com/aws/smithy-go
+format.go, in github.com/cockroachdb/apd/v3
+loop.go, in github.com/cockroachdb/apd/v3
   (from the Go project)
+
 internal/snapref, in github.com/klauspost/compress
   (from the Snappy-Go project)
 
@@ -310,5 +315,6 @@ MIT License
 -----------
 parquet/compress/brotli.go, in github.com/apache/arrow-go/v18
   (from the brotli project)
+
 zstd/internal/xxhash, in github.com/klauspost/compress
   (from the xxhash project)
