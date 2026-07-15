@@ -64,6 +64,16 @@ builds:
 archives:
   - formats: [zip]
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    # Note that setting `files` replaces the defaults rather than adding to
+    # them, so README.md is listed explicitly to keep it in the archive.
+    files:
+      - src: LICENSE-binary
+        dst: LICENSE
+      - src: NOTICE-binary
+        dst: NOTICE
+      - src: licenses-binary
+        dst: licenses
+      - README.md
 
 checksum:
   name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'

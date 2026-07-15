@@ -18,6 +18,9 @@
 .gitignore
 LICENSE
 NOTICE
+LICENSE-binary
+NOTICE-binary
+licenses-binary
 go.sum
 build
 dist
