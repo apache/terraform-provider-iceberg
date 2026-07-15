@@ -7,6 +7,18 @@ The Apache Software Foundation (http://www.apache.org/).
 
 --------------------------------------------------------------------------------
 
+This product bundles Apache Arrow Go with the following in its NOTICE file:
+| Apache Arrow Go
+| Copyright 2016-2025 The Apache Software Foundation
+
+--------------------------------------------------------------------------------
+
+This product bundles Apache Thrift with the following in its NOTICE file:
+| Apache Thrift
+| Copyright (C) 2006 - 2019, The Apache Software Foundation
+
+--------------------------------------------------------------------------------
+
 This product bundles the AWS SDK for Go with the following in its NOTICE file:
 | AWS SDK for Go
 | Copyright 2015 Amazon.com, Inc. or its affiliates. All Rights Reserved.
