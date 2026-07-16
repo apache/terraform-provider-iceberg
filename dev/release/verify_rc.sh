@@ -65,6 +65,7 @@ VERIFY_SUCCESS=no
 
 setup_tmpdir() {
   cleanup() {
+    go clean -modcache || :
     if [ "${VERIFY_SUCCESS}" = "yes" ]; then
       rm -rf "${VERIFY_TMPDIR}"
     else
@@ -174,7 +175,9 @@ ensure_go() {
     if go version; then
       GOPATH="${VERIFY_TMPDIR}/gopath"
       export GOPATH
-      mkdir -p "${GOPATH}"
+      GOMODCACHE="${GOPATH}/pkg/mod"
+      export GOMODCACHE
+      mkdir -p "${GOMODCACHE}"
       return
     fi
   fi
@@ -217,7 +220,9 @@ ensure_go() {
   export GOROOT
   GOPATH="$(pwd)/gopath"
   export GOPATH
-  mkdir -p "${GOPATH}"
+  GOMODCACHE="${GOPATH}/pkg/mod"
+  export GOMODCACHE
+  mkdir -p "${GOMODCACHE}"
   PATH="${GOROOT}/bin:${GOPATH}/bin:${PATH}"
 }
 
