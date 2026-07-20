@@ -165,9 +165,9 @@ func (s *icebergTablePartitionSpec) ToIceberg() (*iceberg.PartitionSpec, error) 
 func (s *icebergTablePartitionSpec) FromIceberg(icebergSpec iceberg.PartitionSpec) error {
 	s.SpecID = types.Int64Value(int64(icebergSpec.ID()))
 	s.Fields = make([]icebergTablePartitionField, 0, icebergSpec.NumFields())
-	for field := range icebergSpec.Fields() {
+	for _, field := range icebergSpec.Fields() {
 		s.Fields = append(s.Fields, icebergTablePartitionField{
-			SourceIDs: []int64{int64(field.SourceID)},
+			SourceIDs: []int64{int64(field.SourceID())},
 			FieldID:   types.Int64Value(int64(field.FieldID)),
 			Name:      field.Name,
 			Transform: field.Transform.String(),
