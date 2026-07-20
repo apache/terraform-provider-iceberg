@@ -39,4 +39,5 @@ jobs:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       with:
         persist-credentials: false
-    - uses: apache/infrastructure-actions/allowlist-check@4e9c961f587f72b170874b6f5cd4ac15f7f26eb8  # main
+    # ASF infra action is only published on the main branch (no release tags), so it is SHA-pinned intentionally; zizmor's ref-version-mismatch is suppressed because the comment cannot name a matching version ref.
+    - uses: apache/infrastructure-actions/allowlist-check@4e9c961f587f72b170874b6f5cd4ac15f7f26eb8 # zizmor: ignore[ref-version-mismatch] main
