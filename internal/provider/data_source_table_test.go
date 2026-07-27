@@ -24,8 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
-// TestAccIcebergTableDataSource_Full runs end-to-end against a real REST catalog when ICEBERG_CATALOG_URI is set
-// (same pattern as TestAccPolarisPrincipal_Full and the integration Makefile targets).
+// TestAccIcebergTableDataSource_Full runs end-to-end against a real REST catalog when ICEBERG_CATALOG_URI is set.
 func TestAccIcebergTableDataSource_Full(t *testing.T) {
 	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
 	if catalogURI == "" {

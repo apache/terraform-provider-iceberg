@@ -36,7 +36,6 @@ Use Terraform to interact with Iceberg REST Catalog instances.
 
 - [iceberg_namespace](resources/namespace.md) — Manage a catalog namespace.
 - [iceberg_table](resources/table.md) — Manage an Iceberg table.
-- [iceberg_polaris_principal](resources/polaris_principal.md) — Manage a Polaris principal (Polaris deployments).
 
 ## Schema
 
