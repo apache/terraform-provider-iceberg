@@ -17,6 +17,7 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/apache/iceberg-go"
@@ -99,6 +100,59 @@ func (s *icebergTableSchema) FromIceberg(icebergSchema *iceberg.Schema) error {
 	}
 
 	return json.Unmarshal(b, s)
+}
+
+// validateSchemaEvolution returns an error if a field present in both schemas
+// changes in a way Iceberg disallows. Fields are matched by ID, so additions
+// and deletions are always permitted.
+func validateSchemaEvolution(current, planned *iceberg.Schema) error {
+	currentByID, err := iceberg.IndexByID(current)
+	if err != nil {
+		return err
+	}
+	plannedByID, err := iceberg.IndexByID(planned)
+	if err != nil {
+		return err
+	}
+
+	for id, cur := range currentByID {
+		if plan, ok := plannedByID[id]; ok {
+			if err := validateFieldEvolution(cur, plan); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func validateFieldEvolution(cur, plan iceberg.NestedField) error {
+	if !cur.Required && plan.Required {
+		return fmt.Errorf("field %q (id %d): changing a field from optional to required is not an allowed schema evolution", cur.Name, cur.ID)
+	}
+
+	curPrim, curIsPrim := cur.Type.(iceberg.PrimitiveType)
+	planPrim, planIsPrim := plan.Type.(iceberg.PrimitiveType)
+
+	if !curIsPrim || !planIsPrim {
+		// Nested fields carry their own IDs and are checked separately, so only
+		// the container kind matters here.
+		if cur.Type.Type() != plan.Type.Type() {
+			return fmt.Errorf("field %q (id %d): cannot change field type from %s to %s", cur.Name, cur.ID, cur.Type, plan.Type)
+		}
+
+		return nil
+	}
+
+	// PromoteType rejects a type as a promotion of itself, so only call it when
+	// the type actually changed.
+	if !planPrim.Equals(curPrim) {
+		if _, err := iceberg.PromoteType(curPrim, planPrim); err != nil {
+			return fmt.Errorf("field %q (id %d): %s is not a valid type promotion from %s: %w", cur.Name, cur.ID, plan.Type, cur.Type, err)
+		}
+	}
+
+	return nil
 }
 
 type icebergTablePartitionSpec struct {

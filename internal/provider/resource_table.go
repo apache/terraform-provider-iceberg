@@ -471,6 +471,13 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
+	// Reject changes that aren't a valid Iceberg evolution before committing.
+	if err := validateSchemaEvolution(tbl.Schema(), planIceberg); err != nil {
+		diags.AddError("invalid schema evolution", err.Error())
+
+		return nil
+	}
+
 	// Find the highest existing schema ID to ensure the new one is unique.
 	maxSchemaID := int64(0)
 	for _, s := range tbl.Metadata().Schemas() {

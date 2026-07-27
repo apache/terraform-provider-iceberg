@@ -155,6 +155,108 @@ func TestAccIcebergTableUpdate(t *testing.T) {
 	})
 }
 
+func testAccIcebergTableEvolutionConfig(providerCfg, tableName, dataType string, dataRequired bool) string {
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_evo" {
+  name = ["db_evo"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_evo.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        id       = 1
+        name     = "id"
+        type     = "long"
+        required = true
+      },
+      {
+        id       = 2
+        name     = "data"
+        type     = "%s"
+        required = %t
+      }
+    ]
+  }
+}
+`, tableName, dataType, dataRequired)
+}
+
+func TestAccIcebergTableInvalidEvolution(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "invalid_evolution_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableEvolutionConfig(providerCfg, tableName, "long", false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.type", "long"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+				),
+			},
+			{
+				// long -> string is not a valid Iceberg type promotion.
+				Config:      testAccIcebergTableEvolutionConfig(providerCfg, tableName, "string", false),
+				ExpectError: regexp.MustCompile(`(?s)invalid schema evolution.*not a valid type promotion`),
+			},
+			{
+				// optional -> required is not an allowed schema evolution.
+				Config:      testAccIcebergTableEvolutionConfig(providerCfg, tableName, "long", true),
+				ExpectError: regexp.MustCompile(`(?s)invalid schema evolution.*optional to required`),
+			},
+			{
+				// Neither rejected change reached the catalog, so the table is
+				// still on its original schema version.
+				Config: testAccIcebergTableEvolutionConfig(providerCfg, tableName, "long", false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.type", "long"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.required", "false"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccIcebergTableValidEvolution(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "valid_evolution_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableEvolutionConfig(providerCfg, tableName, "int", false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.type", "int"),
+				),
+			},
+			{
+				Config: testAccIcebergTableEvolutionConfig(providerCfg, tableName, "long", false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.type", "long"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccIcebergTablePropertiesUpdate(t *testing.T) {
 	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
 	if catalogURI == "" {
