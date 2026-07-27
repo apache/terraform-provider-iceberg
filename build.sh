@@ -18,7 +18,8 @@
 # --- Configuration ---
 PROVIDER_NAMESPACE="apache"
 PROVIDER_TYPE="iceberg"
-VERSION="1.0.0" 
+# Local dev build, not a release. Override with VERSION=0.1.0 ./build.sh
+VERSION="${VERSION:-0.0.0}"
 BINARY_BASE_NAME="terraform-provider-iceberg"
 BINARY_NAME="${BINARY_BASE_NAME}_v${VERSION}"
 
