@@ -102,6 +102,80 @@ func (s *icebergTableSchema) FromIceberg(icebergSchema *iceberg.Schema) error {
 	return json.Unmarshal(b, s)
 }
 
+// fieldIDUnset reports whether a field ID was left unspecified. Iceberg reserves
+// 0 for the table root, so 0 (like null/unknown) is never a valid field ID.
+func fieldIDUnset(id types.Int64) bool {
+	return id.IsNull() || id.IsUnknown() || id.ValueInt64() == 0
+}
+
+// assignFieldIDs fills unset field IDs (including nested struct, list, and map
+// IDs) with fresh values, preserving any the user set. New IDs are allocated
+// above startAfter and every ID already present, keeping them unique within the
+// schema and against startAfter (pass the table's last-column-id on update).
+func (s *icebergTableSchema) assignFieldIDs(startAfter int64) {
+	maxID := startAfter
+
+	var scan func(fields []icebergTableSchemaField)
+	scan = func(fields []icebergTableSchemaField) {
+		for _, f := range fields {
+			maxID = maxSetID(maxID, f.ID)
+			if f.ListProperties != nil {
+				maxID = maxSetID(maxID, f.ListProperties.ID)
+			}
+			if f.MapProperties != nil {
+				maxID = maxSetID(maxID, f.MapProperties.KeyID)
+				maxID = maxSetID(maxID, f.MapProperties.ValueID)
+			}
+			if f.StructProperties != nil {
+				scan(f.StructProperties.Fields)
+			}
+		}
+	}
+	scan(s.Fields)
+
+	next := func() types.Int64 {
+		maxID++
+
+		return types.Int64Value(maxID)
+	}
+
+	var assign func(fields []icebergTableSchemaField)
+	assign = func(fields []icebergTableSchemaField) {
+		for i := range fields {
+			f := &fields[i]
+			if fieldIDUnset(f.ID) {
+				f.ID = next()
+			}
+			if f.ListProperties != nil && fieldIDUnset(f.ListProperties.ID) {
+				f.ListProperties.ID = next()
+			}
+			if f.MapProperties != nil {
+				if fieldIDUnset(f.MapProperties.KeyID) {
+					f.MapProperties.KeyID = next()
+				}
+				if fieldIDUnset(f.MapProperties.ValueID) {
+					f.MapProperties.ValueID = next()
+				}
+			}
+			if f.StructProperties != nil {
+				assign(f.StructProperties.Fields)
+			}
+		}
+	}
+	assign(s.Fields)
+}
+
+func maxSetID(current int64, id types.Int64) int64 {
+	if fieldIDUnset(id) {
+		return current
+	}
+	if v := id.ValueInt64(); v > current {
+		return v
+	}
+
+	return current
+}
+
 // validateSchemaEvolution returns an error if a field present in both schemas
 // changes in a way Iceberg disallows. Fields are matched by ID, so additions
 // and deletions are always permitted.
