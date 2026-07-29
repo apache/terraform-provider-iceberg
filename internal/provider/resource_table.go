@@ -200,8 +200,8 @@ func (r *icebergTableResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
-	// Assign IDs to any omitted fields; otherwise they serialize as 0 and the
-	// catalog rejects the schema for duplicate field IDs.
+	// Fill omitted IDs; otherwise they serialize as 0 and the catalog rejects
+	// the schema for duplicate field IDs.
 	schema.assignFieldIDs(0)
 
 	tblSchema, err := schema.ToIceberg()
@@ -452,8 +452,9 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
-	// Assign IDs to new fields above the table's last-column-id so they never
-	// collide with an existing or previously-dropped field.
+	// Reuse existing IDs by name (stable across inserts/reorders), then assign
+	// fresh IDs above last-column-id to new fields.
+	planSchema.resolveFieldIDs(&stateSchema)
 	planSchema.assignFieldIDs(int64(tbl.Metadata().LastColumnID()))
 
 	planIceberg, err := planSchema.ToIceberg()

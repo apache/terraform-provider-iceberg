@@ -226,6 +226,98 @@ func TestAccIcebergTableOmittedFieldIDs(t *testing.T) {
 	})
 }
 
+func testAccIcebergTableInsertFieldConfig(providerCfg, tableName string, withMiddle bool) string {
+	middle := ""
+	if withMiddle {
+		middle = `
+      {
+        name     = "middle"
+        type     = "int"
+        required = false
+      },`
+	}
+
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_insert" {
+  name = ["db_insert"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_insert.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        name     = "id"
+        type     = "long"
+        required = true
+      },%s
+      {
+        name     = "data"
+        type     = "string"
+        required = false
+      },
+      {
+        name     = "tags"
+        type     = "list"
+        required = false
+        list_properties = {
+          element_type     = "string"
+          element_required = true
+        }
+      }
+    ]
+  }
+}
+`, tableName, middle)
+}
+
+func TestAccIcebergTableInsertField(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "insert_field_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableInsertFieldConfig(providerCfg, tableName, false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.id", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.id", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.2.id", "3"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.2.list_properties.element_id", "4"),
+				),
+			},
+			{
+				// Inserting a field in the middle must keep every existing
+				// column's ID and give only the new column a fresh one.
+				Config: testAccIcebergTableInsertFieldConfig(providerCfg, tableName, true),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.name", "id"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.id", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.name", "middle"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.id", "5"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.2.name", "data"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.2.id", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.3.name", "tags"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.3.id", "3"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.3.list_properties.element_id", "4"),
+				),
+			},
+			{
+				Config:   testAccIcebergTableInsertFieldConfig(providerCfg, tableName, true),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
 func testAccIcebergTableEvolutionConfig(providerCfg, tableName, dataType string, dataRequired bool) string {
 	return providerCfg + fmt.Sprintf(`
 resource "iceberg_namespace" "db_evo" {

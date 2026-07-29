@@ -102,16 +102,15 @@ func (s *icebergTableSchema) FromIceberg(icebergSchema *iceberg.Schema) error {
 	return json.Unmarshal(b, s)
 }
 
-// fieldIDUnset reports whether a field ID was left unspecified. Iceberg reserves
-// 0 for the table root, so 0 (like null/unknown) is never a valid field ID.
+// fieldIDUnset reports an unspecified field ID: null, unknown, or 0 (Iceberg
+// reserves 0 for the table root).
 func fieldIDUnset(id types.Int64) bool {
 	return id.IsNull() || id.IsUnknown() || id.ValueInt64() == 0
 }
 
-// assignFieldIDs fills unset field IDs (including nested struct, list, and map
-// IDs) with fresh values, preserving any the user set. New IDs are allocated
-// above startAfter and every ID already present, keeping them unique within the
-// schema and against startAfter (pass the table's last-column-id on update).
+// assignFieldIDs fills unset IDs (nested struct/list/map included) with fresh
+// values above startAfter and every existing ID, preserving user-set ones. Pass
+// the table's last-column-id on update.
 func (s *icebergTableSchema) assignFieldIDs(startAfter int64) {
 	maxID := startAfter
 
@@ -174,6 +173,69 @@ func maxSetID(current int64, id types.Int64) int64 {
 	}
 
 	return current
+}
+
+// fieldIDs holds one field's IDs: the field plus any list/map element/key/value.
+type fieldIDs struct {
+	id      types.Int64
+	element types.Int64
+	key     types.Int64
+	value   types.Int64
+}
+
+// resolveFieldIDs reuses prior IDs for same-named fields (matched by path, so
+// nested fields stay scoped to their parent), keeping IDs stable across
+// inserts/reorders. Fills only unset IDs.
+func (s *icebergTableSchema) resolveFieldIDs(prior *icebergTableSchema) {
+	byPath := map[string]fieldIDs{}
+
+	var index func(path string, fields []icebergTableSchemaField)
+	index = func(path string, fields []icebergTableSchemaField) {
+		for _, f := range fields {
+			key := path + "/" + f.Name
+			ids := fieldIDs{id: f.ID}
+			if f.ListProperties != nil {
+				ids.element = f.ListProperties.ID
+			}
+			if f.MapProperties != nil {
+				ids.key = f.MapProperties.KeyID
+				ids.value = f.MapProperties.ValueID
+			}
+			byPath[key] = ids
+			if f.StructProperties != nil {
+				index(key, f.StructProperties.Fields)
+			}
+		}
+	}
+	index("", prior.Fields)
+
+	var apply func(path string, fields []icebergTableSchemaField)
+	apply = func(path string, fields []icebergTableSchemaField) {
+		for i := range fields {
+			f := &fields[i]
+			key := path + "/" + f.Name
+			if match, ok := byPath[key]; ok {
+				if fieldIDUnset(f.ID) {
+					f.ID = match.id
+				}
+				if f.ListProperties != nil && fieldIDUnset(f.ListProperties.ID) {
+					f.ListProperties.ID = match.element
+				}
+				if f.MapProperties != nil {
+					if fieldIDUnset(f.MapProperties.KeyID) {
+						f.MapProperties.KeyID = match.key
+					}
+					if fieldIDUnset(f.MapProperties.ValueID) {
+						f.MapProperties.ValueID = match.value
+					}
+				}
+			}
+			if f.StructProperties != nil {
+				apply(key, f.StructProperties.Fields)
+			}
+		}
+	}
+	apply("", s.Fields)
 }
 
 // validateSchemaEvolution returns an error if a field present in both schemas
