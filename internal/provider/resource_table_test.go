@@ -318,6 +318,57 @@ func TestAccIcebergTableInsertField(t *testing.T) {
 	})
 }
 
+func testAccIcebergTableDuplicateIDsConfig(providerCfg, tableName string) string {
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_dup" {
+  name = ["db_dup"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_dup.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        id       = 1
+        name     = "id"
+        type     = "long"
+        required = true
+      },
+      {
+        id       = 1
+        name     = "data"
+        type     = "string"
+        required = false
+      }
+    ]
+  }
+}
+`, tableName)
+}
+
+func TestAccIcebergTableDuplicateFieldIDs(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "duplicate_ids_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// Two fields sharing an explicit id must fail before commit.
+				Config:      testAccIcebergTableDuplicateIDsConfig(providerCfg, tableName),
+				ExpectError: regexp.MustCompile(`(?s)duplicate field id.*reuses id 1`),
+			},
+		},
+	})
+}
+
 func testAccIcebergTableEvolutionConfig(providerCfg, tableName, dataType string, dataRequired bool) string {
 	return providerCfg + fmt.Sprintf(`
 resource "iceberg_namespace" "db_evo" {

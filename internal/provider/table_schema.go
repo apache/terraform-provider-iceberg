@@ -238,6 +238,58 @@ func (s *icebergTableSchema) resolveFieldIDs(prior *icebergTableSchema) {
 	apply("", s.Fields)
 }
 
+// validateFieldIDs rejects an id used by more than one field. Field, list
+// element, map key/value, and nested ids share one space; users may set them, so
+// collisions must fail before commit.
+func (s *icebergTableSchema) validateFieldIDs() error {
+	seen := map[int64]string{}
+
+	var walk func(path string, fields []icebergTableSchemaField) error
+	walk = func(path string, fields []icebergTableSchemaField) error {
+		for _, f := range fields {
+			name := path + f.Name
+			if err := claimFieldID(seen, f.ID, name); err != nil {
+				return err
+			}
+			if f.ListProperties != nil {
+				if err := claimFieldID(seen, f.ListProperties.ID, name+".element"); err != nil {
+					return err
+				}
+			}
+			if f.MapProperties != nil {
+				if err := claimFieldID(seen, f.MapProperties.KeyID, name+".key"); err != nil {
+					return err
+				}
+				if err := claimFieldID(seen, f.MapProperties.ValueID, name+".value"); err != nil {
+					return err
+				}
+			}
+			if f.StructProperties != nil {
+				if err := walk(name+".", f.StructProperties.Fields); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	}
+
+	return walk("", s.Fields)
+}
+
+func claimFieldID(seen map[int64]string, id types.Int64, name string) error {
+	if fieldIDUnset(id) {
+		return nil
+	}
+	v := id.ValueInt64()
+	if prev, ok := seen[v]; ok {
+		return fmt.Errorf("field %q reuses id %d already assigned to %q", name, v, prev)
+	}
+	seen[v] = name
+
+	return nil
+}
+
 // validateSchemaEvolution returns an error if a field present in both schemas
 // changes in a way Iceberg disallows. Fields are matched by ID, so additions
 // and deletions are always permitted.

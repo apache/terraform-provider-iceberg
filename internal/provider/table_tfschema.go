@@ -125,7 +125,7 @@ func tableSortOrderDataSourceAttributes() map[string]dschema.Attribute {
 func tableSchemaFieldResourceAttributes(depth int) map[string]rscschema.Attribute {
 	attrs := map[string]rscschema.Attribute{
 		"id": rscschema.Int64Attribute{
-			Description: "The field ID. Assigned automatically by the provider if omitted.",
+			Description: "The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.",
 			Optional:    true,
 			Computed:    true,
 		},
@@ -150,7 +150,7 @@ func tableSchemaFieldResourceAttributes(depth int) map[string]rscschema.Attribut
 			Optional:    true,
 			Attributes: map[string]rscschema.Attribute{
 				"element_id": rscschema.Int64Attribute{
-					Description: "The list element id. Assigned automatically by the provider if omitted.",
+					Description: "The list element id. Auto-assigned if omitted.",
 					Optional:    true,
 					Computed:    true,
 				},
@@ -169,7 +169,7 @@ func tableSchemaFieldResourceAttributes(depth int) map[string]rscschema.Attribut
 			Optional:    true,
 			Attributes: map[string]rscschema.Attribute{
 				"key_id": rscschema.Int64Attribute{
-					Description: "The map key id. Assigned automatically by the provider if omitted.",
+					Description: "The map key id. Auto-assigned if omitted.",
 					Optional:    true,
 					Computed:    true,
 				},
@@ -178,7 +178,7 @@ func tableSchemaFieldResourceAttributes(depth int) map[string]rscschema.Attribut
 					Required:    true,
 				},
 				"value_id": rscschema.Int64Attribute{
-					Description: "The map value id. Assigned automatically by the provider if omitted.",
+					Description: "The map value id. Auto-assigned if omitted.",
 					Optional:    true,
 					Computed:    true,
 				},

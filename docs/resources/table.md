@@ -83,6 +83,29 @@ resource "iceberg_table" "example" {
 }
 ```
 
+## Renaming columns
+
+Each field is identified by its `id`, not its name. The provider matches a field
+to its existing column by `id` when one is set, and otherwise by name. So renaming
+a column without keeping its `id` reads as dropping the old column and adding a new
+one — which loses that column's data.
+
+To rename a column while preserving its data, set the field's `id` to the existing
+column's id:
+
+```terraform
+schema = {
+  fields = [
+    {
+      id       = 1        # keep the id of the column being renamed
+      name     = "user_id"
+      type     = "long"
+      required = true
+    }
+  ]
+}
+```
+
 ## Schema
 
 ### Required
@@ -125,7 +148,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID. Assigned automatically by the provider if omitted.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties))
@@ -140,7 +163,7 @@ Required:
 
 Optional:
 
-- `element_id` (Number) The list element id. Assigned automatically by the provider if omitted.
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--map_properties"></a>
@@ -154,8 +177,8 @@ Required:
 
 Optional:
 
-- `key_id` (Number) The map key id. Assigned automatically by the provider if omitted.
-- `value_id` (Number) The map value id. Assigned automatically by the provider if omitted.
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties"></a>
@@ -177,7 +200,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID. Assigned automatically by the provider if omitted.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties))
@@ -192,7 +215,7 @@ Required:
 
 Optional:
 
-- `element_id` (Number) The list element id. Assigned automatically by the provider if omitted.
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--map_properties"></a>
@@ -206,8 +229,8 @@ Required:
 
 Optional:
 
-- `key_id` (Number) The map key id. Assigned automatically by the provider if omitted.
-- `value_id` (Number) The map value id. Assigned automatically by the provider if omitted.
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties"></a>
@@ -229,7 +252,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID. Assigned automatically by the provider if omitted.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties))
@@ -244,7 +267,7 @@ Required:
 
 Optional:
 
-- `element_id` (Number) The list element id. Assigned automatically by the provider if omitted.
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--map_properties"></a>
@@ -258,8 +281,8 @@ Required:
 
 Optional:
 
-- `key_id` (Number) The map key id. Assigned automatically by the provider if omitted.
-- `value_id` (Number) The map value id. Assigned automatically by the provider if omitted.
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties"></a>
@@ -281,7 +304,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID. Assigned automatically by the provider if omitted.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties))
@@ -296,7 +319,7 @@ Required:
 
 Optional:
 
-- `element_id` (Number) The list element id. Assigned automatically by the provider if omitted.
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--map_properties"></a>
@@ -310,8 +333,8 @@ Required:
 
 Optional:
 
-- `key_id` (Number) The map key id. Assigned automatically by the provider if omitted.
-- `value_id` (Number) The map value id. Assigned automatically by the provider if omitted.
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties"></a>
@@ -333,7 +356,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID. Assigned automatically by the provider if omitted.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties))
@@ -348,7 +371,7 @@ Required:
 
 Optional:
 
-- `element_id` (Number) The list element id. Assigned automatically by the provider if omitted.
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--map_properties"></a>
@@ -362,8 +385,8 @@ Required:
 
 Optional:
 
-- `key_id` (Number) The map key id. Assigned automatically by the provider if omitted.
-- `value_id` (Number) The map value id. Assigned automatically by the provider if omitted.
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties"></a>
