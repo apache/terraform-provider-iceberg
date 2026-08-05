@@ -110,7 +110,8 @@ func fieldIDUnset(id types.Int64) bool {
 
 // assignFieldIDs fills unset IDs (nested struct/list/map included) with fresh
 // values above startAfter and every existing ID, preserving user-set ones. Pass
-// the table's last-column-id on update.
+// the table's last-column-id on update so new IDs don't reuse retired columns'.
+// Fresh IDs are unique by construction; user-set ones need validateFieldIDs.
 func (s *icebergTableSchema) assignFieldIDs(startAfter int64) {
 	maxID := startAfter
 
