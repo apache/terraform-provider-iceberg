@@ -40,7 +40,6 @@ resource "iceberg_table" "example" {
         name = "tags"
         type = "list"
         list_properties = {
-          element_id       = 3
           element_type     = "string"
           element_required = true
         }

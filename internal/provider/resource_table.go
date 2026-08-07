@@ -200,6 +200,15 @@ func (r *icebergTableResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
+	// Fill omitted IDs; otherwise they serialize as 0 and the catalog rejects
+	// the schema for duplicate field IDs.
+	schema.assignFieldIDs(0)
+	if err := schema.validateFieldIDs(); err != nil {
+		resp.Diagnostics.AddError("duplicate field id", err.Error())
+
+		return
+	}
+
 	tblSchema, err := schema.ToIceberg()
 	if err != nil {
 		resp.Diagnostics.AddError("failed to convert schema", err.Error())
@@ -445,6 +454,16 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 	diags.Append(d...)
 
 	if diags.HasError() {
+		return nil
+	}
+
+	// Reuse existing IDs by name (stable across inserts/reorders), then assign
+	// fresh IDs above last-column-id to new fields.
+	planSchema.resolveFieldIDs(&stateSchema)
+	planSchema.assignFieldIDs(int64(tbl.Metadata().LastColumnID()))
+	if err := planSchema.validateFieldIDs(); err != nil {
+		diags.AddError("duplicate field id", err.Error())
+
 		return nil
 	}
 

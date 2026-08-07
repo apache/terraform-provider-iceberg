@@ -102,6 +102,195 @@ func (s *icebergTableSchema) FromIceberg(icebergSchema *iceberg.Schema) error {
 	return json.Unmarshal(b, s)
 }
 
+// fieldIDUnset reports an unspecified field ID: null, unknown, or 0 (Iceberg
+// reserves 0 for the table root).
+func fieldIDUnset(id types.Int64) bool {
+	return id.IsNull() || id.IsUnknown() || id.ValueInt64() == 0
+}
+
+// assignFieldIDs fills unset IDs (nested struct/list/map included) with fresh
+// values above startAfter and every existing ID, preserving user-set ones. Pass
+// the table's last-column-id on update so new IDs don't reuse retired columns'.
+// Fresh IDs are unique by construction; user-set ones need validateFieldIDs.
+func (s *icebergTableSchema) assignFieldIDs(startAfter int64) {
+	maxID := startAfter
+
+	var scan func(fields []icebergTableSchemaField)
+	scan = func(fields []icebergTableSchemaField) {
+		for _, f := range fields {
+			maxID = maxSetID(maxID, f.ID)
+			if f.ListProperties != nil {
+				maxID = maxSetID(maxID, f.ListProperties.ID)
+			}
+			if f.MapProperties != nil {
+				maxID = maxSetID(maxID, f.MapProperties.KeyID)
+				maxID = maxSetID(maxID, f.MapProperties.ValueID)
+			}
+			if f.StructProperties != nil {
+				scan(f.StructProperties.Fields)
+			}
+		}
+	}
+	scan(s.Fields)
+
+	next := func() types.Int64 {
+		maxID++
+
+		return types.Int64Value(maxID)
+	}
+
+	var assign func(fields []icebergTableSchemaField)
+	assign = func(fields []icebergTableSchemaField) {
+		for i := range fields {
+			f := &fields[i]
+			if fieldIDUnset(f.ID) {
+				f.ID = next()
+			}
+			if f.ListProperties != nil && fieldIDUnset(f.ListProperties.ID) {
+				f.ListProperties.ID = next()
+			}
+			if f.MapProperties != nil {
+				if fieldIDUnset(f.MapProperties.KeyID) {
+					f.MapProperties.KeyID = next()
+				}
+				if fieldIDUnset(f.MapProperties.ValueID) {
+					f.MapProperties.ValueID = next()
+				}
+			}
+			if f.StructProperties != nil {
+				assign(f.StructProperties.Fields)
+			}
+		}
+	}
+	assign(s.Fields)
+}
+
+func maxSetID(current int64, id types.Int64) int64 {
+	if fieldIDUnset(id) {
+		return current
+	}
+	if v := id.ValueInt64(); v > current {
+		return v
+	}
+
+	return current
+}
+
+// fieldIDs holds one field's IDs: the field plus any list/map element/key/value.
+type fieldIDs struct {
+	id      types.Int64
+	element types.Int64
+	key     types.Int64
+	value   types.Int64
+}
+
+// resolveFieldIDs reuses prior IDs for same-named fields (matched by path, so
+// nested fields stay scoped to their parent), keeping IDs stable across
+// inserts/reorders. Fills only unset IDs.
+func (s *icebergTableSchema) resolveFieldIDs(prior *icebergTableSchema) {
+	byPath := map[string]fieldIDs{}
+
+	var index func(path string, fields []icebergTableSchemaField)
+	index = func(path string, fields []icebergTableSchemaField) {
+		for _, f := range fields {
+			key := path + "/" + f.Name
+			ids := fieldIDs{id: f.ID}
+			if f.ListProperties != nil {
+				ids.element = f.ListProperties.ID
+			}
+			if f.MapProperties != nil {
+				ids.key = f.MapProperties.KeyID
+				ids.value = f.MapProperties.ValueID
+			}
+			byPath[key] = ids
+			if f.StructProperties != nil {
+				index(key, f.StructProperties.Fields)
+			}
+		}
+	}
+	index("", prior.Fields)
+
+	var apply func(path string, fields []icebergTableSchemaField)
+	apply = func(path string, fields []icebergTableSchemaField) {
+		for i := range fields {
+			f := &fields[i]
+			key := path + "/" + f.Name
+			if match, ok := byPath[key]; ok {
+				if fieldIDUnset(f.ID) {
+					f.ID = match.id
+				}
+				if f.ListProperties != nil && fieldIDUnset(f.ListProperties.ID) {
+					f.ListProperties.ID = match.element
+				}
+				if f.MapProperties != nil {
+					if fieldIDUnset(f.MapProperties.KeyID) {
+						f.MapProperties.KeyID = match.key
+					}
+					if fieldIDUnset(f.MapProperties.ValueID) {
+						f.MapProperties.ValueID = match.value
+					}
+				}
+			}
+			if f.StructProperties != nil {
+				apply(key, f.StructProperties.Fields)
+			}
+		}
+	}
+	apply("", s.Fields)
+}
+
+// validateFieldIDs rejects an id used by more than one field. Field, list
+// element, map key/value, and nested ids share one space; users may set them, so
+// collisions must fail before commit.
+func (s *icebergTableSchema) validateFieldIDs() error {
+	seen := map[int64]string{}
+
+	var walk func(path string, fields []icebergTableSchemaField) error
+	walk = func(path string, fields []icebergTableSchemaField) error {
+		for _, f := range fields {
+			name := path + f.Name
+			if err := claimFieldID(seen, f.ID, name); err != nil {
+				return err
+			}
+			if f.ListProperties != nil {
+				if err := claimFieldID(seen, f.ListProperties.ID, name+".element"); err != nil {
+					return err
+				}
+			}
+			if f.MapProperties != nil {
+				if err := claimFieldID(seen, f.MapProperties.KeyID, name+".key"); err != nil {
+					return err
+				}
+				if err := claimFieldID(seen, f.MapProperties.ValueID, name+".value"); err != nil {
+					return err
+				}
+			}
+			if f.StructProperties != nil {
+				if err := walk(name+".", f.StructProperties.Fields); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	}
+
+	return walk("", s.Fields)
+}
+
+func claimFieldID(seen map[int64]string, id types.Int64, name string) error {
+	if fieldIDUnset(id) {
+		return nil
+	}
+	v := id.ValueInt64()
+	if prev, ok := seen[v]; ok {
+		return fmt.Errorf("field %q reuses id %d already assigned to %q", name, v, prev)
+	}
+	seen[v] = name
+
+	return nil
+}
+
 // validateSchemaEvolution returns an error if a field present in both schemas
 // changes in a way Iceberg disallows. Fields are matched by ID, so additions
 // and deletions are always permitted.

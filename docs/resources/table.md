@@ -73,7 +73,6 @@ resource "iceberg_table" "example" {
         name = "tags"
         type = "list"
         list_properties = {
-          element_id       = 3
           element_type     = "string"
           element_required = true
         }
@@ -81,6 +80,29 @@ resource "iceberg_table" "example" {
       }
     ]
   }
+}
+```
+
+## Renaming columns
+
+Each field is identified by its `id`, not its name. The provider matches a field
+to its existing column by `id` when one is set, and otherwise by name. So renaming
+a column without keeping its `id` reads as dropping the old column and adding a new
+one — which loses that column's data.
+
+To rename a column while preserving its data, set the field's `id` to the existing
+column's id:
+
+```terraform
+schema = {
+  fields = [
+    {
+      id       = 1        # keep the id of the column being renamed
+      name     = "user_id"
+      type     = "long"
+      required = true
+    }
+  ]
 }
 ```
 
@@ -126,7 +148,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties))
@@ -136,9 +158,12 @@ Optional:
 
 Required:
 
-- `element_id` (Number) The list element id.
 - `element_required` (Boolean) Whether the list element is required.
 - `element_type` (String) The list element type.
+
+Optional:
+
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--map_properties"></a>
@@ -146,11 +171,14 @@ Required:
 
 Required:
 
-- `key_id` (Number) The map key id.
 - `key_type` (String) The map key type.
-- `value_id` (Number) The map value id.
 - `value_required` (Boolean) Whether the map value is required.
 - `value_type` (String) The map value type.
+
+Optional:
+
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties"></a>
@@ -172,7 +200,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties))
@@ -182,9 +210,12 @@ Optional:
 
 Required:
 
-- `element_id` (Number) The list element id.
 - `element_required` (Boolean) Whether the list element is required.
 - `element_type` (String) The list element type.
+
+Optional:
+
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--map_properties"></a>
@@ -192,11 +223,14 @@ Required:
 
 Required:
 
-- `key_id` (Number) The map key id.
 - `key_type` (String) The map key type.
-- `value_id` (Number) The map value id.
 - `value_required` (Boolean) Whether the map value is required.
 - `value_type` (String) The map value type.
+
+Optional:
+
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties"></a>
@@ -218,7 +252,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties))
@@ -228,9 +262,12 @@ Optional:
 
 Required:
 
-- `element_id` (Number) The list element id.
 - `element_required` (Boolean) Whether the list element is required.
 - `element_type` (String) The list element type.
+
+Optional:
+
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--map_properties"></a>
@@ -238,11 +275,14 @@ Required:
 
 Required:
 
-- `key_id` (Number) The map key id.
 - `key_type` (String) The map key type.
-- `value_id` (Number) The map value id.
 - `value_required` (Boolean) Whether the map value is required.
 - `value_type` (String) The map value type.
+
+Optional:
+
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties"></a>
@@ -264,7 +304,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties))
@@ -274,9 +314,12 @@ Optional:
 
 Required:
 
-- `element_id` (Number) The list element id.
 - `element_required` (Boolean) Whether the list element is required.
 - `element_type` (String) The list element type.
+
+Optional:
+
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--map_properties"></a>
@@ -284,11 +327,14 @@ Required:
 
 Required:
 
-- `key_id` (Number) The map key id.
 - `key_type` (String) The map key type.
-- `value_id` (Number) The map value id.
 - `value_required` (Boolean) Whether the map value is required.
 - `value_type` (String) The map value type.
+
+Optional:
+
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties"></a>
@@ -310,7 +356,7 @@ Required:
 Optional:
 
 - `doc` (String) The field documentation.
-- `id` (Number) The field ID.
+- `id` (Number) The field ID, stable across updates. Auto-assigned if omitted. To rename a column, keep its id; otherwise it is dropped and re-added.
 - `list_properties` (Attributes) Properties for list type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--list_properties))
 - `map_properties` (Attributes) Properties for map type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--map_properties))
 - `struct_properties` (Attributes) Properties for struct type. (see [below for nested schema](#nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties))
@@ -320,9 +366,12 @@ Optional:
 
 Required:
 
-- `element_id` (Number) The list element id.
 - `element_required` (Boolean) Whether the list element is required.
 - `element_type` (String) The list element type.
+
+Optional:
+
+- `element_id` (Number) The list element id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--map_properties"></a>
@@ -330,11 +379,14 @@ Required:
 
 Required:
 
-- `key_id` (Number) The map key id.
 - `key_type` (String) The map key type.
-- `value_id` (Number) The map value id.
 - `value_required` (Boolean) Whether the map value is required.
 - `value_type` (String) The map value type.
+
+Optional:
+
+- `key_id` (Number) The map key id. Auto-assigned if omitted.
+- `value_id` (Number) The map value id. Auto-assigned if omitted.
 
 
 <a id="nestedatt--schema--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties--fields--struct_properties"></a>
