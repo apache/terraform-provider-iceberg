@@ -196,11 +196,22 @@ collect() {
 }
 
 # Rewrites attributed.tsv in place, applying dev/licenses/overrides.tsv.
+#
+# An entry that matches nothing is an error rather than a no-op: it is either a
+# typo in the key or a dependency that has since been dropped, and silently
+# ignoring it would let a correction the maintainer believes is in force quietly
+# stop applying.
 apply_overrides() {
   [[ -f "${OVERRIDES_FILE}" ]] || return 0
-  awk -F'\t' -v OFS='\t' '
+  local status=0
+  awk -F'\t' -v OFS='\t' -v file="${OVERRIDES_FILE}" '
     NR == FNR {
       if ($0 ~ /^[[:space:]]*(#|$)/) next
+      if (NF < 2 || $1 == "" || $2 == "") {
+        print "error: " file ":" FNR ": expected <key><TAB><SPDX id | SKIP>" > "/dev/stderr"
+        malformed = 1
+        next
+      }
       override[$1] = $2
       next
     }
@@ -214,12 +225,34 @@ apply_overrides() {
         key = key "/" sub_dir
       }
       if (key in override) {
+        used[key] = 1
         if (override[key] == "SKIP") next
         $4 = override[key]
       }
       print
     }
-  ' "${OVERRIDES_FILE}" "${WORK}/attributed.tsv" >"${WORK}/attributed.override"
+    END {
+      # A malformed entry never made it into the table, so it would also report
+      # as unmatched. Report the cause, not the consequence.
+      if (malformed) exit 2
+      for (key in override) {
+        if (key in used) continue
+        print "error: " file ": override for \"" key "\" matches no linked dependency" > "/dev/stderr"
+        unmatched = 1
+      }
+      if (unmatched) exit 1
+    }
+  ' "${OVERRIDES_FILE}" "${WORK}/attributed.tsv" >"${WORK}/attributed.override" || status=$?
+
+  if [[ ${status} -eq 2 ]]; then
+    fail "dev/licenses/overrides.tsv is malformed; each entry is
+<key><TAB><SPDX id | SKIP><TAB><reason>, and the separators must be tabs."
+  elif [[ ${status} -ne 0 ]]; then
+    fail "every override must name a dependency that is actually linked; drop the
+entry if the dependency is gone, or correct the key. A module's own license file
+is keyed by the module path, a nested one by the module path joined with the
+directory it governs."
+  fi
   mv "${WORK}/attributed.override" "${WORK}/attributed.tsv"
 }
 

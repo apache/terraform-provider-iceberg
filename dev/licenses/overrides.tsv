@@ -28,5 +28,9 @@
 # <key> is the module path for a module's own license file, or the module path
 # joined with the directory the license governs for a nested one -- either way
 # it reads like an import path. SKIP drops the entry from the inventory.
+#
+# Every entry must match a dependency that is actually linked. One that matches
+# nothing fails the run rather than being ignored, so a typo in a key surfaces
+# immediately instead of leaving a correction silently not applied.
 
 github.com/klauspost/compress	BSD-3-Clause	LICENSE is BSD-3-Clause (for the Go-derived code) with the Apache-2.0 text appended; go-licenses only sees the Apache-2.0 half. The BSD-3-Clause grant is the one that has to be reproduced.
