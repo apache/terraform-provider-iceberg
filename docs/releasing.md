@@ -68,6 +68,22 @@ Before cutting a release candidate:
   `docs/` and `examples/` that reference them.
 * **Confirm the provider address** in [`main.go`](../main.go) is
   `registry.terraform.io/apache/iceberg`.
+* **Refresh the binary license inventory** by running
+  [`./dev/update_licenses.sh`](../dev/update_licenses.sh) and committing any
+  result. `LICENSE-binary`, `NOTICE-binary`, and `licenses-binary/` describe the
+  third-party code statically linked into the convenience binaries, and
+  [ASF policy](https://infra.apache.org/licensing-howto.html) is that they must
+  exactly represent what ships. They go stale whenever the dependency tree moves
+  — most often through an `// indirect` dependency that no review of `go.mod`
+  would flag. `./dev/update_licenses.sh --check` reports drift without writing.
+
+    The script regenerates the marked section of `LICENSE-binary` and the
+    per-module texts under `licenses-binary/`. Two things it can only report,
+    because they need a human: bundled code carrying a license other than its
+    own module's (listed by hand in the trailing section of `LICENSE-binary`),
+    and `NOTICE` files that `NOTICE-binary` has to reproduce. Misclassifications
+    belong in [`dev/licenses/overrides.tsv`](../dev/licenses/overrides.tsv), not
+    in the generated output.
 
 ## Publishing a Release Candidate (RC)
 
