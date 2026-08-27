@@ -50,7 +50,16 @@ OVERRIDES_FILE="${REPO_ROOT}/dev/licenses/overrides.tsv"
 BEGIN_MARK='--- BEGIN GENERATED SECTION: dev/update_licenses.sh (do not edit by hand) ---'
 END_MARK='--- END GENERATED SECTION ---'
 
+# Pinned, and honored strictly: versions of go-licenses disagree about which file
+# in a module is its license, so an unpinned run would classify dependencies
+# according to whatever the operator happened to have installed. v1.6.0 and
+# v2.0.1 already differ over github.com/apache/thrift.
+#
+# Bumping this to v2 or later also means changing the module path below to carry
+# a /vN suffix, and re-reviewing the inventory: v2 corrects the license file it
+# picks for some modules, which moves their classification.
 GO_LICENSES_VERSION="${GO_LICENSES_VERSION:-v1.6.0}"
+GO_LICENSES_MODULE="github.com/google/go-licenses"
 
 # Keep in sync with builds.goos / builds.goarch in .goreleaser.yml.
 DEFAULT_PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 freebsd/amd64 freebsd/arm64"
@@ -70,8 +79,10 @@ Usage: dev/update_licenses.sh [--check]
 Environment:
   LICENSE_PLATFORMS     Space-separated GOOS/GOARCH list to analyze. Defaults to
                         the full .goreleaser.yml matrix.
-  GO_LICENSES           Path to an existing go-licenses binary.
-  GO_LICENSES_VERSION   Version to install if one is not already on PATH.
+  GO_LICENSES           Path to a go-licenses binary to run instead of the
+                        pinned one, bypassing the version pin.
+  GO_LICENSES_VERSION   Version to pin to. Defaults to the version this script
+                        was written against.
 EOF
 }
 
@@ -110,21 +121,24 @@ heading_for() {
   esac
 }
 
+# Resolves the pinned go-licenses, installing it under build/ if needed.
+#
+# Deliberately never falls back to a go-licenses on PATH: which version that is
+# varies per machine, and the point of the pin is that two people running this
+# get the same inventory. The version is part of the install path, so moving the
+# pin installs afresh rather than silently reusing an older build.
 ensure_go_licenses() {
   if [[ -n "${GO_LICENSES:-}" ]]; then
     [[ -x "${GO_LICENSES}" ]] || fail "GO_LICENSES=${GO_LICENSES} is not executable"
+    log "using GO_LICENSES=${GO_LICENSES} in place of the pinned ${GO_LICENSES_VERSION}"
     return
   fi
-  if command -v go-licenses >/dev/null 2>&1; then
-    GO_LICENSES="$(command -v go-licenses)"
-    return
-  fi
-  local gobin="${REPO_ROOT}/build/tools"
+  local gobin="${REPO_ROOT}/build/tools/go-licenses-${GO_LICENSES_VERSION}"
   if [[ ! -x "${gobin}/go-licenses" ]]; then
-    log "installing go-licenses ${GO_LICENSES_VERSION} into build/tools"
+    log "installing go-licenses ${GO_LICENSES_VERSION}"
     # GOFLAGS is cleared so a caller's -mod=vendor/-mod=readonly does not leak
     # into the install of an unrelated module.
-    GOFLAGS='' GOBIN="${gobin}" go install "github.com/google/go-licenses@${GO_LICENSES_VERSION}"
+    GOFLAGS='' GOBIN="${gobin}" go install "${GO_LICENSES_MODULE}@${GO_LICENSES_VERSION}"
   fi
   GO_LICENSES="${gobin}/go-licenses"
 }
