@@ -406,20 +406,32 @@ check_nested() {
 
 sync_texts() {
   local heading mod ver sub dir target
-  local -A wanted=()
 
+  # The wanted set is kept in a file rather than an associative array: macOS
+  # ships bash 3.2, which has none, and this has to run there.
+  : >"${WORK}/wanted.tsv"
   while IFS=$'\t' read -r heading mod ver sub; do
     dir="$(cd "${REPO_ROOT}" && go list -m -f '{{.Dir}}' "${mod}")"
     [[ -n "${dir}" && -f "${dir}/${sub}" ]] || fail "license file missing for ${mod}: ${dir}/${sub}"
     target="LICENSE-$(slug_for "${mod}").txt"
-    wanted["${target}"]="${dir}/${sub}"
+    printf '%s\t%s\n' "${target}" "${dir}/${sub}" >>"${WORK}/wanted.tsv"
   done <"${WORK}/modlevel.tsv"
+  sort -u -o "${WORK}/wanted.tsv" "${WORK}/wanted.tsv"
+  cut -f1 "${WORK}/wanted.tsv" >"${WORK}/wanted.names"
+
+  # Two texts claiming one filename would take turns overwriting each other, so
+  # which one ships would come down to iteration order.
+  local collisions
+  collisions="$(uniq -d "${WORK}/wanted.names")"
+  [[ -z "${collisions}" ]] || fail "more than one license text claims the same licenses-binary/ file: ${collisions}
+Either two modules' slugs collide -- give one a distinct stem in slug_for() -- or
+a module ships two root license files, in which case SKIP the redundant one in
+dev/licenses/overrides.tsv."
 
   # The module cache is read-only, so copy with an explicit mode rather than
   # preserving 0444 and making the next run unable to overwrite its own output.
   local name src
-  for name in "${!wanted[@]}"; do
-    src="${wanted[${name}]}"
+  while IFS=$'\t' read -r name src; do
     if [[ ! -f "${LICENSES_DIR}/${name}" ]]; then
       if [[ ${CHECK_ONLY} -eq 1 ]]; then
         drift "missing licenses-binary/${name} (copy of ${src})"
@@ -435,7 +447,7 @@ sync_texts() {
         install -m 644 "${src}" "${LICENSES_DIR}/${name}"
       fi
     fi
-  done
+  done <"${WORK}/wanted.tsv"
 
   # Prune texts for modules that were in the generated section but are no longer
   # linked. Files this script never generated are left alone.
@@ -443,7 +455,7 @@ sync_texts() {
   while read -r prev; do
     [[ -n "${prev}" ]] || continue
     name="LICENSE-$(slug_for "${prev}").txt"
-    [[ -n "${wanted[${name}]:-}" ]] && continue
+    grep -qxF -e "${name}" "${WORK}/wanted.names" && continue
     [[ -f "${LICENSES_DIR}/${name}" ]] || continue
     if [[ ${CHECK_ONLY} -eq 1 ]]; then
       drift "licenses-binary/${name} is stale: ${prev} is no longer linked"
