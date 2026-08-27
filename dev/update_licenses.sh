@@ -480,7 +480,8 @@ main() {
   ensure_go_licenses
 
   WORK="$(mktemp -d)"
-  trap 'rm -rf "${WORK}"' EXIT
+  LICENSE_BINARY_TMP="${LICENSE_BINARY}.tmp"
+  trap 'rm -rf "${WORK}" "${LICENSE_BINARY_TMP}"' EXIT
 
   log "Resolving the dependency tree of the convenience binaries..."
   (cd "${REPO_ROOT}" && go mod download)
@@ -489,6 +490,17 @@ main() {
   partition
   build_license_binary
 
+  # licenses-binary/ is brought in line first and LICENSE-binary is written last,
+  # never the other way around. The generated section of LICENSE-binary is the
+  # record of which files under licenses-binary/ this script owns, so a run that
+  # rewrote it and then died would drop a module from that record while the
+  # module's text was still on disk -- and, with the only evidence that the file
+  # was ever generated now gone, a later --check would call that tree clean.
+  # In this order an interrupted run always leaves LICENSE-binary describing the
+  # texts it is packaged with, so --check still reports the gap and a rerun
+  # still closes it.
+  sync_texts
+
   if [[ ${CHECK_ONLY} -eq 1 ]]; then
     if ! diff -u "${LICENSE_BINARY}" "${WORK}/LICENSE-binary.new" >"${WORK}/diff"; then
       drift "LICENSE-binary is out of date:"
@@ -496,10 +508,12 @@ main() {
     fi
   elif ! cmp -s "${LICENSE_BINARY}" "${WORK}/LICENSE-binary.new"; then
     log "  ~ LICENSE-binary"
-    cp "${WORK}/LICENSE-binary.new" "${LICENSE_BINARY}"
+    # Swapped into place rather than written over, so an interrupted write cannot
+    # leave a truncated inventory behind.
+    cp "${WORK}/LICENSE-binary.new" "${LICENSE_BINARY_TMP}"
+    mv "${LICENSE_BINARY_TMP}" "${LICENSE_BINARY}"
   fi
 
-  sync_texts
   check_nested
   report_notices
 
