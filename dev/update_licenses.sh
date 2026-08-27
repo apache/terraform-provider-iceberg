@@ -135,8 +135,15 @@ collect() {
   local template="${WORK}/report.tpl"
   printf '{{range .}}{{.LicenseName}}\t{{.LicensePath}}\n{{end}}' >"${template}"
 
-  local main_module
+  local main_module goroot
   main_module="$(cd "${REPO_ROOT}" && go list -m)"
+  # go-licenses decides whether a package is stdlib by testing its source path
+  # against build.Default.GOROOT, i.e. the GOROOT of its own process. Under a
+  # downloaded toolchain the stdlib sources live in the module cache instead, so
+  # without this every stdlib package is reported as "does not have module info"
+  # and the run fails outright (google/go-licenses#244, still unfixed in v2.0.1).
+  # Resolved from the repo so that a toolchain directive in go.mod is honored.
+  goroot="$(cd "${REPO_ROOT}" && go env GOROOT)"
 
   : >"${WORK}/modules.raw"
   : >"${WORK}/licenses.raw"
@@ -155,9 +162,14 @@ collect() {
       go list -deps -f '{{with .Module}}{{.Dir}}{{"\t"}}{{.Path}}{{"\t"}}{{.Version}}{{end}}' .) \
       >>"${WORK}/modules.raw"
 
-    (cd "${REPO_ROOT}" && GOOS="${goos}" GOARCH="${goarch}" \
+    # go-licenses writes its diagnostics to stderr and says nothing on stdout
+    # when it fails, so the log is the only account of what went wrong.
+    if ! (cd "${REPO_ROOT}" && GOOS="${goos}" GOARCH="${goarch}" GOROOT="${goroot}" \
       "${GO_LICENSES}" report . --template "${template}") \
-      >>"${WORK}/licenses.raw" 2>>"${WORK}/go-licenses.log"
+      >>"${WORK}/licenses.raw" 2>>"${WORK}/go-licenses.log"; then
+      cat "${WORK}/go-licenses.log" >&2
+      fail "go-licenses failed for ${platform}"
+    fi
   done
 
   # Drop stdlib, which has no module and so yields a blank line.
