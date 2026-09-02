@@ -229,6 +229,11 @@ The final GitHub release carries exactly the files the registry requires: one
 `..._SHA256SUMS`, one `..._SHA256SUMS.sig` signed by the KEYS-registered key,
 and one `..._manifest.json`.
 
+> **Note:** Because the binaries are promoted rather than rebuilt, `go version -m`
+> on one reports the RC tag it was built from (`v0.7.0-rc1`). The filenames and
+> the registry metadata carry the final version, and those are what Terraform
+> resolves against.
+
 Within a few minutes the
 [Terraform Registry](https://registry.terraform.io/providers/apache/iceberg) and
 [OpenTofu Registry](https://search.opentofu.org/provider/apache/iceberg) detect
@@ -295,6 +300,9 @@ It expects `git`, `gpg`, `curl`, and `shasum`/`sha512sum` on your `PATH`.
 
 The RAT License check needs `java` and `unzip`, but can be skipped with `VERIFY_RAT=0`.
 Binary verification needs [`gh`](https://cli.github.com/) and can be skipped with `VERIFY_BINARY=0`.
+
+The binaries are named with the final version, but `go version -m` reports the RC
+tag they were built from. That is expected, and stays true of the final release.
 
 A valid signature from a key in the `KEYS` file, a matching checksum, a clean RAT
 check, verified binaries, and a clean build and test is a `+1`.
