@@ -17,39 +17,39 @@ provider "iceberg" {
   catalog_uri = "http://localhost:8181"
 }
 
-resource "iceberg_namespace" "example" {
-  name = ["example_namespace"]
+resource "iceberg_namespace" "analytics" {
+  name = ["analytics"]
+
   user_properties = {
-    description = "An example namespace"
+    owner = "data-platform"
   }
 }
 
-resource "iceberg_table" "example" {
-  namespace = iceberg_namespace.example.name
-  name      = "example_table"
+resource "iceberg_table" "events" {
+  namespace = iceberg_namespace.analytics.name
+  name      = "events"
 
   schema = {
     fields = [
       {
-        name     = "id"
+        name     = "event_id"
         type     = "long"
         required = true
       },
       {
-        name     = "data"
+        name     = "event_type"
         type     = "string"
-        required = false
+        required = true
       },
       {
-        name = "tags"
-        type = "list"
-        list_properties = {
-          element_id       = 3
-          element_type     = "string"
-          element_required = true
-        }
-        required = false
+        name     = "event_time"
+        type     = "timestamp"
+        required = true
       }
     ]
+  }
+
+  user_properties = {
+    "write.format.default" = "parquet"
   }
 }
