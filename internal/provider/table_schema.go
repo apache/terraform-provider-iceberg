@@ -239,9 +239,12 @@ func (s *icebergTableSchema) resolveFieldIDs(prior *icebergTableSchema) {
 	apply("", s.Fields)
 }
 
-// validateFieldIDs rejects an id used by more than one field. Field, list
-// element, map key/value, and nested ids share one space; users may set them, so
-// collisions must fail before commit.
+// maxFieldID is the largest field ID a table schema may use.
+const maxFieldID = 2147483447
+
+// validateFieldIDs rejects an id outside the usable range or used by more than
+// one field. Field, list element, map key/value, and nested ids share one
+// space; users may set them, so bad ids must fail before commit.
 func (s *icebergTableSchema) validateFieldIDs() error {
 	seen := map[int64]string{}
 
@@ -283,6 +286,9 @@ func claimFieldID(seen map[int64]string, id types.Int64, name string) error {
 		return nil
 	}
 	v := id.ValueInt64()
+	if v < 0 || v > maxFieldID {
+		return fmt.Errorf("field %q has id %d; field ids must be between 1 and %d (higher ids are reserved by the Iceberg spec)", name, v, maxFieldID)
+	}
 	if prev, ok := seen[v]; ok {
 		return fmt.Errorf("field %q reuses id %d already assigned to %q", name, v, prev)
 	}
