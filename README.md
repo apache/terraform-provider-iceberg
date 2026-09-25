@@ -23,6 +23,7 @@ This [Terraform](https://terraform.io) and [OpenTofu](https://www.opentofu.org/)
 
 - `iceberg_namespace`: Read metadata for an existing namespace (catalog properties).
 - `iceberg_table`: Read metadata for an existing table (schema, partition spec, sort order, and catalog properties).
+- `iceberg_tables`: List table names in a namespace (catalog discovery).
 
 ## Supported Resources
 
