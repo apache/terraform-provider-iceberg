@@ -26,18 +26,19 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/processcreds"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 
-var (
-	_ provider.Provider                   = &icebergProvider{}
-	_ provider.ProviderWithValidateConfig = &icebergProvider{}
-)
+var _ provider.Provider = &icebergProvider{}
 
 // New is a helper function to simplify provider server and testing implementation.
 func New() func() provider.Provider {
@@ -48,32 +49,45 @@ func New() func() provider.Provider {
 
 // icebergProvider is the provider implementation.
 type icebergProvider struct {
-	catalogURI           string
-	catalogType          string
-	token                string
-	warehouse            string
-	headers              map[string]string
-	sigv4Enabled         bool
-	sigv4Region          string
-	sigv4SigningName     string
-	sigv4AccessKeyID     string
-	sigv4SecretAccessKey string
-	sigv4SessionToken    string
+	catalogURI  string
+	catalogType string
+	token       string
+	warehouse   string
+	headers     map[string]string
+	sigv4       *sigv4Config
+}
+
+// sigv4Config holds the settings for signing requests with AWS SigV4.
+type sigv4Config struct {
+	region          string
+	signingName     string
+	accessKeyID     string
+	secretAccessKey string
+	sessionToken    string
+	// unknown is set while planning when auth depends on values known only after apply.
+	unknown bool
 }
 
 // icebergProviderModel maps provider schema data to a Go type.
 type icebergProviderModel struct {
-	CatalogURI           types.String `tfsdk:"catalog_uri"`
-	Type                 types.String `tfsdk:"type"`
-	Token                types.String `tfsdk:"token"`
-	Warehouse            types.String `tfsdk:"warehouse"`
-	Headers              types.Map    `tfsdk:"headers"`
-	SigV4Enabled         types.Bool   `tfsdk:"sigv4_enabled"`
-	SigV4Region          types.String `tfsdk:"sigv4_region"`
-	SigV4SigningName     types.String `tfsdk:"sigv4_signing_name"`
-	SigV4AccessKeyID     types.String `tfsdk:"sigv4_access_key_id"`
-	SigV4SecretAccessKey types.String `tfsdk:"sigv4_secret_access_key"`
-	SigV4SessionToken    types.String `tfsdk:"sigv4_session_token"`
+	CatalogURI types.String `tfsdk:"catalog_uri"`
+	Type       types.String `tfsdk:"type"`
+	Token      types.String `tfsdk:"token"`
+	Warehouse  types.String `tfsdk:"warehouse"`
+	Headers    types.Map    `tfsdk:"headers"`
+	Auth       types.Object `tfsdk:"auth"`
+}
+
+type icebergAuthModel struct {
+	SigV4 types.Object `tfsdk:"sigv4"`
+}
+
+type icebergSigV4Model struct {
+	Region          types.String `tfsdk:"region"`
+	SigningName     types.String `tfsdk:"signing_name"`
+	AccessKeyID     types.String `tfsdk:"access_key_id"`
+	SecretAccessKey types.String `tfsdk:"secret_access_key"`
+	SessionToken    types.String `tfsdk:"session_token"`
 }
 
 // Metadata returns the provider type name.
@@ -109,94 +123,57 @@ func (p *icebergProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 				Sensitive:   true,
 				ElementType: types.StringType,
 			},
-			"sigv4_enabled": schema.BoolAttribute{
-				Description: "Enable AWS SigV4 request signing for the REST catalog. Required by catalogs that authenticate with SigV4, such as AWS Glue.",
+			"auth": schema.SingleNestedAttribute{
+				Description: "Authentication settings for the Iceberg REST catalog.",
 				Optional:    true,
-			},
-			"sigv4_region": schema.StringAttribute{
-				Description: "Signing region for SigV4. When omitted, the region from the AWS environment (`AWS_REGION`, shared config) is used.",
-				Optional:    true,
-			},
-			"sigv4_signing_name": schema.StringAttribute{
-				Description: "Signing service name for SigV4 (the credential-scope service). Defaults to `execute-api`. Use `glue` for AWS Glue.",
-				Optional:    true,
-			},
-			"sigv4_access_key_id": schema.StringAttribute{
-				Description: "Access key ID for SigV4 signing. When omitted, the standard AWS credential chain (environment, shared config, instance role) is used.",
-				Optional:    true,
-				Sensitive:   true,
-			},
-			"sigv4_secret_access_key": schema.StringAttribute{
-				Description: "Secret access key for SigV4 signing. Must be paired with `sigv4_access_key_id`.",
-				Optional:    true,
-				Sensitive:   true,
-			},
-			"sigv4_session_token": schema.StringAttribute{
-				Description: "Optional session token for temporary (STS) SigV4 credentials.",
-				Optional:    true,
-				Sensitive:   true,
+				Attributes: map[string]schema.Attribute{
+					"sigv4": schema.SingleNestedAttribute{
+						Description: "Sign requests with AWS Signature Version 4, as catalogs such as AWS Glue require. Setting this attribute enables signing.",
+						Optional:    true,
+						Attributes: map[string]schema.Attribute{
+							"region": schema.StringAttribute{
+								Description: "Signing region. When omitted, the region from the AWS environment (`AWS_REGION`, shared config) is used.",
+								Optional:    true,
+							},
+							"signing_name": schema.StringAttribute{
+								Description: "Signing service name (the credential-scope service). Defaults to `execute-api`. Use `glue` for AWS Glue.",
+								Optional:    true,
+							},
+							"access_key_id": schema.StringAttribute{
+								Description: "Access key ID. When omitted, the standard AWS credential chain (environment, shared config, instance role) is used.",
+								Optional:    true,
+								Sensitive:   true,
+								Validators: []validator.String{
+									stringvalidator.LengthAtLeast(1),
+									stringvalidator.AlsoRequires(path.MatchRelative().AtParent().AtName("secret_access_key")),
+								},
+							},
+							"secret_access_key": schema.StringAttribute{
+								Description: "Secret access key. Must be set together with `access_key_id`.",
+								Optional:    true,
+								Sensitive:   true,
+								Validators: []validator.String{
+									stringvalidator.LengthAtLeast(1),
+									stringvalidator.AlsoRequires(path.MatchRelative().AtParent().AtName("access_key_id")),
+								},
+							},
+							"session_token": schema.StringAttribute{
+								Description: "Session token for temporary (STS) credentials. Requires `access_key_id` and `secret_access_key`.",
+								Optional:    true,
+								Sensitive:   true,
+								Validators: []validator.String{
+									stringvalidator.LengthAtLeast(1),
+									stringvalidator.AlsoRequires(
+										path.MatchRelative().AtParent().AtName("access_key_id"),
+										path.MatchRelative().AtParent().AtName("secret_access_key"),
+									),
+								},
+							},
+						},
+					},
+				},
 			},
 		},
-	}
-}
-
-// ValidateConfig rejects incoherent SigV4 configuration before Configure runs.
-func (p *icebergProvider) ValidateConfig(ctx context.Context, req provider.ValidateConfigRequest, resp *provider.ValidateConfigResponse) {
-	var data icebergProviderModel
-
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	validateSigV4Config(data, &resp.Diagnostics)
-}
-
-// validateSigV4Config reports SigV4 misconfigurations. Checks that need an
-// unknown value are skipped; Terraform validates again at apply with concrete values.
-func validateSigV4Config(data icebergProviderModel, diags *diag.Diagnostics) {
-	// presence reports whether v is a known, non-empty string, and whether it
-	// is resolved (not unknown).
-	presence := func(v types.String) (set, known bool) {
-		if v.IsUnknown() {
-			return false, false
-		}
-
-		return !v.IsNull() && v.ValueString() != "", true
-	}
-
-	accessKeySet, accessKeyKnown := presence(data.SigV4AccessKeyID)
-	secretKeySet, secretKeyKnown := presence(data.SigV4SecretAccessKey)
-	sessionTokenSet, sessionTokenKnown := presence(data.SigV4SessionToken)
-	regionSet, regionKnown := presence(data.SigV4Region)
-	signingNameSet, signingNameKnown := presence(data.SigV4SigningName)
-
-	enabled := !data.SigV4Enabled.IsNull() && !data.SigV4Enabled.IsUnknown() && data.SigV4Enabled.ValueBool()
-	enabledKnown := !data.SigV4Enabled.IsUnknown()
-
-	if accessKeyKnown && secretKeyKnown && accessKeySet != secretKeySet {
-		diags.AddError(
-			"Incomplete SigV4 credentials",
-			"sigv4_access_key_id and sigv4_secret_access_key must be set together.",
-		)
-	}
-
-	if sessionTokenKnown && accessKeyKnown && secretKeyKnown &&
-		sessionTokenSet && !(accessKeySet && secretKeySet) {
-		diags.AddError(
-			"Incomplete SigV4 credentials",
-			"sigv4_session_token requires sigv4_access_key_id and sigv4_secret_access_key.",
-		)
-	}
-
-	optionSet := (accessKeyKnown && accessKeySet) || (secretKeyKnown && secretKeySet) ||
-		(sessionTokenKnown && sessionTokenSet) || (regionKnown && regionSet) ||
-		(signingNameKnown && signingNameSet)
-	if enabledKnown && !enabled && optionSet {
-		diags.AddWarning(
-			"SigV4 options ignored",
-			"sigv4_* options are set but sigv4_enabled is not true; requests will not be signed.",
-		)
 	}
 }
 
@@ -252,23 +229,41 @@ func (p *icebergProvider) Configure(ctx context.Context, req provider.ConfigureR
 		p.headers = headers
 	}
 
-	if !data.SigV4Enabled.IsNull() && !data.SigV4Enabled.IsUnknown() {
-		p.sigv4Enabled = data.SigV4Enabled.ValueBool()
-	}
-	if !data.SigV4Region.IsNull() && !data.SigV4Region.IsUnknown() {
-		p.sigv4Region = data.SigV4Region.ValueString()
-	}
-	if !data.SigV4SigningName.IsNull() && !data.SigV4SigningName.IsUnknown() {
-		p.sigv4SigningName = data.SigV4SigningName.ValueString()
-	}
-	if !data.SigV4AccessKeyID.IsNull() && !data.SigV4AccessKeyID.IsUnknown() {
-		p.sigv4AccessKeyID = data.SigV4AccessKeyID.ValueString()
-	}
-	if !data.SigV4SecretAccessKey.IsNull() && !data.SigV4SecretAccessKey.IsUnknown() {
-		p.sigv4SecretAccessKey = data.SigV4SecretAccessKey.ValueString()
-	}
-	if !data.SigV4SessionToken.IsNull() && !data.SigV4SessionToken.IsUnknown() {
-		p.sigv4SessionToken = data.SigV4SessionToken.ValueString()
+	p.sigv4 = nil
+	if !data.Auth.IsNull() {
+		authValue, err := data.Auth.ToTerraformValue(ctx)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid auth configuration", err.Error())
+
+			return
+		}
+
+		if !authValue.IsFullyKnown() {
+			// Guessing any part would sign with the wrong scope or identity.
+			p.sigv4 = &sigv4Config{unknown: true}
+		} else {
+			var auth icebergAuthModel
+			resp.Diagnostics.Append(data.Auth.As(ctx, &auth, basetypes.ObjectAsOptions{})...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+
+			if !auth.SigV4.IsNull() {
+				var m icebergSigV4Model
+				resp.Diagnostics.Append(auth.SigV4.As(ctx, &m, basetypes.ObjectAsOptions{})...)
+				if resp.Diagnostics.HasError() {
+					return
+				}
+
+				p.sigv4 = &sigv4Config{
+					region:          m.Region.ValueString(),
+					signingName:     m.SigningName.ValueString(),
+					accessKeyID:     m.AccessKeyID.ValueString(),
+					secretAccessKey: m.SecretAccessKey.ValueString(),
+					sessionToken:    m.SessionToken.ValueString(),
+				}
+			}
+		}
 	}
 
 	resp.DataSourceData = p
@@ -277,12 +272,7 @@ func (p *icebergProvider) Configure(ctx context.Context, req provider.ConfigureR
 
 func (p *icebergProvider) NewCatalog(ctx context.Context) (catalog.Catalog, error) {
 	opts := make([]rest.Option, 0)
-	switch {
-	case p.token != "" && p.sigv4Enabled:
-		// SigV4 owns Authorization; the bearer token travels, signed, as
-		// Original-Authorization, as the Java client does.
-		opts = append(opts, rest.WithHeaders(map[string]string{"Original-Authorization": "Bearer " + p.token}))
-	case p.token != "":
+	if p.token != "" && p.sigv4 == nil {
 		opts = append(opts, rest.WithOAuthToken(p.token))
 	}
 
@@ -290,32 +280,101 @@ func (p *icebergProvider) NewCatalog(ctx context.Context) (catalog.Catalog, erro
 		opts = append(opts, rest.WithWarehouseLocation(p.warehouse))
 	}
 
-	opts = append(opts, rest.WithCustomTransport(&headerRoundTripper{headers: p.headers}))
-
-	if p.sigv4Enabled {
-		region := p.sigv4Region
-		if p.sigv4AccessKeyID != "" && p.sigv4SecretAccessKey != "" {
-			if region == "" {
-				cfg, err := config.LoadDefaultConfig(ctx)
-				if err != nil {
-					return nil, fmt.Errorf("resolve sigv4_region from the AWS environment: %w", err)
-				}
-				if cfg.Region == "" {
-					return nil, errors.New("sigv4_region is required: no region is configured in the AWS environment")
-				}
-				region = cfg.Region
-			}
-			creds := credentials.NewStaticCredentialsProvider(
-				p.sigv4AccessKeyID, p.sigv4SecretAccessKey, p.sigv4SessionToken)
-			opts = append(opts, rest.WithAwsConfig(aws.Config{
-				Region:      region,
-				Credentials: aws.NewCredentialsCache(creds),
-			}))
+	if p.sigv4 == nil {
+		opts = append(opts, rest.WithCustomTransport(&headerRoundTripper{headers: p.headers}))
+	} else {
+		sigv4Opts, err := p.sigv4.options(ctx, p.token, p.headers)
+		if err != nil {
+			return nil, err
 		}
-		opts = append(opts, rest.WithSigV4RegionSvc(region, p.sigv4SigningName))
+		opts = append(opts, sigv4Opts...)
 	}
 
 	return rest.NewCatalog(ctx, p.catalogType, p.catalogURI, opts...)
+}
+
+// options returns the iceberg-go options that sign requests with SigV4.
+// iceberg-go signs before a custom transport runs, so the configured headers
+// go through it to be signed with the request. SigV4 owns Authorization, so an
+// Authorization header or bearer token travels as Original-Authorization, as
+// the Java client does.
+func (s *sigv4Config) options(ctx context.Context, token string, headers map[string]string) ([]rest.Option, error) {
+	cfg, err := s.awsConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	signed := make(map[string]string, len(headers)+1)
+	for name, value := range headers {
+		if http.CanonicalHeaderKey(name) == "Authorization" {
+			name = "Original-Authorization"
+		}
+		signed[name] = value
+	}
+	if token != "" {
+		signed["Original-Authorization"] = "Bearer " + token
+	}
+
+	return []rest.Option{
+		rest.WithHeaders(signed),
+		rest.WithAwsConfig(cfg),
+		rest.WithSigV4RegionSvc(cfg.Region, s.signingName),
+		// Without a transport, iceberg-go builds one per catalog and never
+		// closes its idle connections.
+		rest.WithCustomTransport(http.DefaultTransport),
+	}, nil
+}
+
+// awsConfig resolves the credentials and region to sign with. Static keys
+// replace the AWS credential chain. The region falls back to the AWS
+// environment, and credential providers that call STS get it as well.
+func (s *sigv4Config) awsConfig(ctx context.Context) (aws.Config, error) {
+	if s.unknown {
+		return aws.Config{}, errors.New("auth.sigv4 is not known until apply, so requests cannot be signed yet")
+	}
+	static := s.accessKeyID != "" && s.secretAccessKey != ""
+	if !static && (s.accessKeyID != "" || s.secretAccessKey != "" || s.sessionToken != "") {
+		// Never fall back to the AWS credential chain when keys were configured.
+		return aws.Config{}, errors.New("auth.sigv4: access_key_id and secret_access_key must be set together, and session_token requires both")
+	}
+
+	var load []func(*config.LoadOptions) error
+	if static {
+		creds := credentials.NewStaticCredentialsProvider(s.accessKeyID, s.secretAccessKey, s.sessionToken)
+		if s.region != "" {
+			return aws.Config{Region: s.region, Credentials: creds}, nil
+		}
+		// Only the region comes from the AWS environment, not its credential chain.
+		load = append(load, config.WithCredentialsProvider(creds))
+	}
+	if s.region != "" {
+		load = append(load, config.WithRegion(s.region))
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx, load...)
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("load the AWS configuration for auth.sigv4: %w", err)
+	}
+	if cfg.Region == "" {
+		return aws.Config{}, errors.New("auth.sigv4.region is required: no region is configured in the AWS environment")
+	}
+	cfg.Credentials = processOutputHidden{cfg.Credentials}
+
+	return cfg, nil
+}
+
+// processOutputHidden keeps credential_process output out of errors: the AWS
+// SDK quotes output it cannot parse, and that output carries the secrets.
+type processOutputHidden struct{ aws.CredentialsProvider }
+
+func (p processOutputHidden) Retrieve(ctx context.Context) (aws.Credentials, error) {
+	creds, err := p.CredentialsProvider.Retrieve(ctx)
+	var processErr *processcreds.ProviderError
+	if errors.As(err, &processErr) {
+		return creds, errors.New("credential_process failed; its output is not shown because it can contain secrets")
+	}
+
+	return creds, err
 }
 
 type headerRoundTripper struct {
