@@ -17,18 +17,24 @@ package provider
 
 import (
 	"context"
-	"net/http"
+	"net/url"
 
 	"github.com/apache/iceberg-go/catalog"
 	"github.com/apache/iceberg-go/catalog/rest"
+	"github.com/hashicorp/terraform-plugin-framework-validators/providervalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 
-var _ provider.Provider = &icebergProvider{}
+var (
+	_ provider.Provider                     = &icebergProvider{}
+	_ provider.ProviderWithConfigValidators = &icebergProvider{}
+)
 
 // New is a helper function to simplify provider server and testing implementation.
 func New() func() provider.Provider {
@@ -44,6 +50,16 @@ type icebergProvider struct {
 	token       string
 	warehouse   string
 	headers     map[string]string
+	oauth2      *oauth2Config
+}
+
+// oauth2Config holds the OAuth2 client credentials settings passed to iceberg-go.
+type oauth2Config struct {
+	credential string
+	serverURI  *url.URL
+	scope      string
+	audience   string
+	resource   string
 }
 
 // icebergProviderModel maps provider schema data to a Go type.
@@ -53,6 +69,19 @@ type icebergProviderModel struct {
 	Token      types.String `tfsdk:"token"`
 	Warehouse  types.String `tfsdk:"warehouse"`
 	Headers    types.Map    `tfsdk:"headers"`
+	Auth       types.Object `tfsdk:"auth"`
+}
+
+type icebergAuthModel struct {
+	OAuth2 types.Object `tfsdk:"oauth2"`
+}
+
+type icebergOAuth2Model struct {
+	Credential types.String `tfsdk:"credential"`
+	ServerURI  types.String `tfsdk:"server_uri"`
+	Scope      types.String `tfsdk:"scope"`
+	Audience   types.String `tfsdk:"audience"`
+	Resource   types.String `tfsdk:"resource"`
 }
 
 // Metadata returns the provider type name.
@@ -88,7 +117,50 @@ func (p *icebergProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 				Sensitive:   true,
 				ElementType: types.StringType,
 			},
+			"auth": schema.SingleNestedAttribute{
+				Description: "Authentication settings for the Iceberg REST catalog.",
+				Optional:    true,
+				Attributes: map[string]schema.Attribute{
+					"oauth2": schema.SingleNestedAttribute{
+						Description: "Authenticate with the OAuth2 client credentials flow. Tokens are fetched and refreshed automatically.",
+						Optional:    true,
+						Attributes: map[string]schema.Attribute{
+							"credential": schema.StringAttribute{
+								Description: "The client credential, formatted as `client_id:client_secret`. A value without a colon is used as the client secret with an empty client ID.",
+								Required:    true,
+								Sensitive:   true,
+							},
+							"server_uri": schema.StringAttribute{
+								Description: "The OAuth2 token endpoint. Defaults to `{catalog_uri}/v1/oauth/tokens`.",
+								Optional:    true,
+							},
+							"scope": schema.StringAttribute{
+								Description: "The scope to request. Defaults to `catalog`.",
+								Optional:    true,
+							},
+							"audience": schema.StringAttribute{
+								Description: "The audience to request.",
+								Optional:    true,
+							},
+							"resource": schema.StringAttribute{
+								Description: "The resource to request.",
+								Optional:    true,
+							},
+						},
+					},
+				},
+			},
 		},
+	}
+}
+
+// ConfigValidators returns validators that apply across provider attributes.
+func (p *icebergProvider) ConfigValidators(_ context.Context) []provider.ConfigValidator {
+	return []provider.ConfigValidator{
+		providervalidator.Conflicting(
+			path.MatchRoot("token"),
+			path.MatchRoot("auth").AtName("oauth2"),
+		),
 	}
 }
 
@@ -144,8 +216,54 @@ func (p *icebergProvider) Configure(ctx context.Context, req provider.ConfigureR
 		p.headers = headers
 	}
 
+	if !data.Auth.IsNull() && !data.Auth.IsUnknown() {
+		var auth icebergAuthModel
+		resp.Diagnostics.Append(data.Auth.As(ctx, &auth, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		if !auth.OAuth2.IsNull() && !auth.OAuth2.IsUnknown() {
+			p.oauth2 = configureOAuth2(ctx, auth.OAuth2, resp)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+		}
+	}
+
 	resp.DataSourceData = p
 	resp.ResourceData = p
+}
+
+func configureOAuth2(ctx context.Context, obj types.Object, resp *provider.ConfigureResponse) *oauth2Config {
+	var m icebergOAuth2Model
+	resp.Diagnostics.Append(obj.As(ctx, &m, basetypes.ObjectAsOptions{})...)
+	if resp.Diagnostics.HasError() {
+		return nil
+	}
+
+	cfg := &oauth2Config{
+		credential: m.Credential.ValueString(),
+		scope:      m.Scope.ValueString(),
+		audience:   m.Audience.ValueString(),
+		resource:   m.Resource.ValueString(),
+	}
+
+	if serverURI := m.ServerURI.ValueString(); serverURI != "" {
+		u, err := url.Parse(serverURI)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("auth").AtName("oauth2").AtName("server_uri"),
+				"Invalid OAuth2 Server URI",
+				"server_uri must be an absolute URL. Got: "+serverURI,
+			)
+
+			return nil
+		}
+		cfg.serverURI = u
+	}
+
+	return cfg
 }
 
 func (p *icebergProvider) NewCatalog(ctx context.Context) (catalog.Catalog, error) {
@@ -154,25 +272,31 @@ func (p *icebergProvider) NewCatalog(ctx context.Context) (catalog.Catalog, erro
 		opts = append(opts, rest.WithOAuthToken(p.token))
 	}
 
+	if o := p.oauth2; o != nil {
+		opts = append(opts, rest.WithCredential(o.credential))
+		if o.serverURI != nil {
+			opts = append(opts, rest.WithAuthURI(o.serverURI))
+		}
+		if o.scope != "" {
+			opts = append(opts, rest.WithScope(o.scope))
+		}
+		if o.audience != "" {
+			opts = append(opts, rest.WithAudience(o.audience))
+		}
+		if o.resource != "" {
+			opts = append(opts, rest.WithResource(o.resource))
+		}
+	}
+
 	if p.warehouse != "" {
 		opts = append(opts, rest.WithWarehouseLocation(p.warehouse))
 	}
 
-	opts = append(opts, rest.WithCustomTransport(&headerRoundTripper{headers: p.headers}))
-
-	return rest.NewCatalog(ctx, p.catalogType, p.catalogURI, opts...)
-}
-
-type headerRoundTripper struct {
-	headers map[string]string
-}
-
-func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	for k, v := range h.headers {
-		req.Header.Add(k, v)
+	if len(p.headers) > 0 {
+		opts = append(opts, rest.WithHeaders(p.headers))
 	}
 
-	return http.DefaultTransport.RoundTrip(req)
+	return rest.NewCatalog(ctx, p.catalogType, p.catalogURI, opts...)
 }
 
 // DataSources defines the data sources implemented in the provider.
