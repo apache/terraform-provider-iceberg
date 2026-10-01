@@ -101,6 +101,37 @@ jobs:
           cache: false
           cache-dependency-path: go.sum
 
+      # Go 1.24+ stamps debug.BuildInfo.Main.Version from local VCS tags.
+      # RC jobs run on vX.Y.Z-rcN, so without a vX.Y.Z tag the binary embeds
+      # the RC version. The voted binaries are promoted bit-for-bit, so stamp
+      # the final version now. This tag is ephemeral and MUST stay local; the
+      # published vX.Y.Z tag is created by release.sh only after the vote.
+      - name: Create local-only final version tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          final_tag="v${VERSION}"
+          head_sha="$(git rev-parse HEAD)"
+
+          if git show-ref --verify --quiet "refs/tags/${final_tag}"; then
+            existing="$(git rev-parse "${final_tag}^{commit}")"
+            if [ "${existing}" != "${head_sha}" ]; then
+              echo "::error::Refusing to overwrite ${final_tag}: points at ${existing}, HEAD is ${head_sha}"
+              exit 1
+            fi
+            echo "Reusing existing ${final_tag} at ${head_sha}"
+          else
+            git tag "${final_tag}" "${head_sha}"
+            echo "Created local-only ${final_tag} at ${head_sha}"
+          fi
+
+          tagged="$(git rev-parse "${final_tag}^{commit}")"
+          if [ "${tagged}" != "${head_sha}" ]; then
+            echo "::error::${final_tag} does not point at HEAD ${head_sha}"
+            exit 1
+          fi
+
       - name: Build artifacts with GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -112,6 +143,77 @@ jobs:
           # voted binaries can be promoted unchanged. Skipping validate lets this
           # override GoReleaser's tag-derived version.
           GORELEASER_CURRENT_TAG: v${{ steps.version.outputs.version }}
+
+      - name: Verify embedded module version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected_version="v${VERSION}"
+          expected_revision="$(git rev-parse HEAD)"
+
+          shopt -s nullglob
+          zips=(dist/terraform-provider-iceberg_"${VERSION}"_*.zip)
+          if [ "${#zips[@]}" -eq 0 ]; then
+            echo "::error::No provider ZIP artifacts found in dist/"
+            exit 1
+          fi
+
+          failed=0
+          for zip in "${zips[@]}"; do
+            tmp="$(mktemp -d)"
+            unzip -q -o "${zip}" -d "${tmp}"
+            binlist="$(mktemp)"
+            find "${tmp}" -type f \( \
+              -name "terraform-provider-iceberg_v${VERSION}" -o \
+              -name "terraform-provider-iceberg_v${VERSION}.exe" \) \
+              > "${binlist}"
+            bin_count="$(wc -l < "${binlist}" | tr -d ' ')"
+            if [ "${bin_count}" -ne 1 ]; then
+              echo "::error::Expected exactly one provider binary in ${zip}, found ${bin_count}"
+              failed=1
+              rm -rf "${tmp}" "${binlist}"
+              continue
+            fi
+
+            bin="$(cat "${binlist}")"
+            rm -f "${binlist}"
+            if ! info="$(go version -m "${bin}")"; then
+              echo "::error::go version -m failed for ${zip}"
+              failed=1
+              rm -rf "${tmp}"
+              continue
+            fi
+
+            mod_version="$(printf '%s\n' "${info}" | awk -F '\t' '$2 == "mod" { print $4; exit }')"
+            vcs_revision="$(printf '%s\n' "${info}" | sed -n 's/^\tbuild\tvcs.revision=//p')"
+            vcs_modified="$(printf '%s\n' "${info}" | sed -n 's/^\tbuild\tvcs.modified=//p')"
+
+            echo "Verified ${zip}:"
+            echo "  mod=${mod_version}"
+            echo "  vcs.revision=${vcs_revision}"
+            echo "  vcs.modified=${vcs_modified}"
+
+            if [ -z "${mod_version}" ] || [ -z "${vcs_revision}" ] || [ -z "${vcs_modified}" ]; then
+              echo "::error::Incomplete build info in ${zip}"
+              failed=1
+            elif [ "${mod_version}" != "${expected_version}" ]; then
+              echo "::error::${zip}: module version is ${mod_version}, want ${expected_version}"
+              failed=1
+            elif [ "${vcs_revision}" != "${expected_revision}" ]; then
+              echo "::error::${zip}: vcs.revision is ${vcs_revision}, want ${expected_revision}"
+              failed=1
+            elif [ "${vcs_modified}" != "false" ]; then
+              echo "::error::${zip}: vcs.modified is ${vcs_modified}, want false"
+              failed=1
+            fi
+            rm -rf "${tmp}"
+          done
+
+          if [ "${failed}" -ne 0 ]; then
+            echo "::error::Embedded module version verification failed"
+            exit 1
+          fi
 
       - name: Stage registry manifest
         env:
