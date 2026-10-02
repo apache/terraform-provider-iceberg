@@ -363,7 +363,7 @@ func TestAccIcebergTableDuplicateFieldIDs(t *testing.T) {
 			{
 				// Two fields sharing an explicit id must fail before commit.
 				Config:      testAccIcebergTableDuplicateIDsConfig(providerCfg, tableName),
-				ExpectError: regexp.MustCompile(`(?s)duplicate field id.*reuses id 1`),
+				ExpectError: regexp.MustCompile(`(?s)invalid field id.*reuses id 1`),
 			},
 		},
 	})
@@ -396,6 +396,86 @@ resource "iceberg_table" "test" {
   }
 }
 `, tableName, dataType, dataRequired)
+}
+
+func testAccIcebergTableExtraFieldConfig(providerCfg, tableName string, extraID int64) string {
+	extra := ""
+	if extraID != 0 {
+		extra = fmt.Sprintf(`,
+      {
+        id       = %d
+        name     = "extra"
+        type     = "string"
+        required = false
+      }`, extraID)
+	}
+
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_reserved" {
+  name = ["db_reserved"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_reserved.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        id       = 1
+        name     = "id"
+        type     = "long"
+        required = true
+      }%s
+    ]
+  }
+}
+`, tableName, extra)
+}
+
+func TestAccIcebergTableReservedFieldIDs(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "reserved_ids_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableExtraFieldConfig(providerCfg, tableName, 0),
+				Check:  resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+			},
+			{
+				// The spec reserves ids above 2147483447.
+				Config:      testAccIcebergTableExtraFieldConfig(providerCfg, tableName, 2147483448),
+				ExpectError: regexp.MustCompile(`(?s)invalid field id.*id 2147483448`),
+			},
+			{
+				Config:      testAccIcebergTableExtraFieldConfig(providerCfg, tableName, 2147483647),
+				ExpectError: regexp.MustCompile(`(?s)invalid field id.*id 2147483647`),
+			},
+			{
+				// Neither rejected id reached the catalog.
+				Config: testAccIcebergTableExtraFieldConfig(providerCfg, tableName, 0),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.#", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+				),
+			},
+			{
+				// The highest non-reserved id is accepted.
+				Config: testAccIcebergTableExtraFieldConfig(providerCfg, tableName, 2147483447),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.id", "2147483447"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "1"),
+				),
+			},
+		},
+	})
 }
 
 func TestAccIcebergTableInvalidEvolution(t *testing.T) {
