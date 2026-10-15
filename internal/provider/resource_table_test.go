@@ -478,6 +478,85 @@ func TestAccIcebergTableReservedFieldIDs(t *testing.T) {
 	})
 }
 
+func testAccIcebergTableSecondFieldConfig(providerCfg, tableName, fieldName, fieldID string) string {
+	second := ""
+	if fieldName != "" {
+		id := ""
+		if fieldID != "" {
+			id = "id       = " + fieldID
+		}
+		second = fmt.Sprintf(`,
+      {
+        %s
+        name     = "%s"
+        type     = "string"
+        required = false
+      }`, id, fieldName)
+	}
+
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_dropped" {
+  name = ["db_dropped"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_dropped.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        id       = 1
+        name     = "id"
+        type     = "long"
+        required = true
+      }%s
+    ]
+  }
+}
+`, tableName, second)
+}
+
+func TestAccIcebergTableDroppedFieldIDReuse(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "dropped_ids_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableSecondFieldConfig(providerCfg, tableName, "dropped", "2"),
+				Check:  resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.id", "2"),
+			},
+			{
+				Config: testAccIcebergTableSecondFieldConfig(providerCfg, tableName, "", ""),
+				Check:  resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.#", "1"),
+			},
+			{
+				Config:      testAccIcebergTableSecondFieldConfig(providerCfg, tableName, "replacement", "2"),
+				ExpectError: regexp.MustCompile(`(?s)invalid field id.*belonged to dropped field "dropped"`),
+			},
+			{
+				// Re-adding the dropped field by name doesn't restore its id either.
+				Config:      testAccIcebergTableSecondFieldConfig(providerCfg, tableName, "dropped", "2"),
+				ExpectError: regexp.MustCompile(`(?s)invalid field id.*belonged to dropped field "dropped"`),
+			},
+			{
+				Config: testAccIcebergTableSecondFieldConfig(providerCfg, tableName, "replacement", ""),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.name", "replacement"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.id", "3"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccIcebergTableInvalidEvolution(t *testing.T) {
 	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
 	if catalogURI == "" {

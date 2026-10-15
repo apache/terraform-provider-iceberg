@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/apache/iceberg-go"
+	"github.com/apache/iceberg-go/table"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -239,5 +240,89 @@ func TestAssignFieldIDsIntoReservedRange(t *testing.T) {
 	s.assignFieldIDs(0)
 	if err := s.validateFieldIDs(); err == nil || !strings.Contains(err.Error(), "id 2147483448") {
 		t.Fatalf("expected reserved id error, got %v", err)
+	}
+}
+
+func TestValidateNewFieldIDs(t *testing.T) {
+	// last-column-id 5 is above any id a schema used.
+	metadata, err := table.ParseMetadataString(`{
+		"format-version": 2,
+		"table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+		"location": "s3://warehouse/table",
+		"last-sequence-number": 0,
+		"last-updated-ms": 1700000000000,
+		"last-column-id": 5,
+		"current-schema-id": 1,
+		"schemas": [
+			{"type": "struct", "schema-id": 0, "fields": [
+				{"id": 1, "name": "id", "required": true, "type": "long"},
+				{"id": 2, "name": "dropped", "required": false, "type": "string"},
+				{"id": 3, "name": "tags", "required": false, "type": {
+					"type": "list", "element-id": 4, "element": "string", "element-required": false}}
+			]},
+			{"type": "struct", "schema-id": 1, "fields": [
+				{"id": 1, "name": "id", "required": true, "type": "long"}
+			]}
+		],
+		"default-spec-id": 0,
+		"partition-specs": [{"spec-id": 0, "fields": []}],
+		"last-partition-id": 999,
+		"default-sort-order-id": 0,
+		"sort-orders": [{"order-id": 0, "fields": []}]
+	}`)
+	if err != nil {
+		t.Fatalf("parse metadata: %v", err)
+	}
+
+	id := iceberg.NestedField{ID: 1, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: true}
+	withField := func(f iceberg.NestedField) *iceberg.Schema {
+		return iceberg.NewSchema(2, id, f)
+	}
+
+	tests := []struct {
+		name    string
+		planned *iceberg.Schema
+		wantErr string
+	}{
+		{name: "unchanged", planned: iceberg.NewSchema(2, id)},
+		{
+			name:    "new id above last-column-id",
+			planned: withField(iceberg.NestedField{ID: 6, Name: "added", Type: iceberg.PrimitiveTypes.String}),
+		},
+		{
+			name:    "dropped field id",
+			planned: withField(iceberg.NestedField{ID: 2, Name: "replacement", Type: iceberg.PrimitiveTypes.String}),
+			wantErr: `field "replacement" has id 2, which belonged to dropped field "dropped"`,
+		},
+		{
+			name:    "dropped list element id",
+			planned: withField(iceberg.NestedField{ID: 4, Name: "replacement", Type: iceberg.PrimitiveTypes.String}),
+			wantErr: `which belonged to dropped field "tags.element"`,
+		},
+		{
+			name:    "assigned id never in a schema",
+			planned: withField(iceberg.NestedField{ID: 5, Name: "replacement", Type: iceberg.PrimitiveTypes.String}),
+			wantErr: "new fields need ids above the last-column-id 5",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateNewFieldIDs(metadata, tt.planned)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
 	}
 }
