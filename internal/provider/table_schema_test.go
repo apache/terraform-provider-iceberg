@@ -15,10 +15,12 @@
 package provider
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/apache/iceberg-go"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 // schemaOf builds a single-field schema for "data" with id 2, alongside a
@@ -179,5 +181,63 @@ func TestValidateSchemaEvolution(t *testing.T) {
 				t.Errorf("expected error containing %q, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestValidateFieldIDsReservedRange(t *testing.T) {
+	schemaWithIDs := func(ids ...int64) icebergTableSchema {
+		var s icebergTableSchema
+		for i, id := range ids {
+			s.Fields = append(s.Fields, icebergTableSchemaField{
+				ID:   types.Int64Value(id),
+				Name: fmt.Sprintf("f%d", i),
+				Type: "long",
+			})
+		}
+
+		return s
+	}
+
+	tests := []struct {
+		name    string
+		schema  icebergTableSchema
+		wantErr string
+	}{
+		{name: "max usable id", schema: schemaWithIDs(1, 2147483447)},
+		{name: "first reserved id", schema: schemaWithIDs(1, 2147483448), wantErr: "id 2147483448"},
+		{name: "last reserved id", schema: schemaWithIDs(1, 2147483647), wantErr: "id 2147483647"},
+		{name: "negative id", schema: schemaWithIDs(1, -1), wantErr: "id -1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.schema.validateFieldIDs()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestAssignFieldIDsIntoReservedRange(t *testing.T) {
+	// The fresh id assigned after 2147483447 is reserved.
+	s := icebergTableSchema{Fields: []icebergTableSchemaField{
+		{ID: types.Int64Value(2147483447), Name: "a", Type: "long"},
+		{ID: types.Int64Null(), Name: "b", Type: "long"},
+	}}
+	s.assignFieldIDs(0)
+	if err := s.validateFieldIDs(); err == nil || !strings.Contains(err.Error(), "id 2147483448") {
+		t.Fatalf("expected reserved id error, got %v", err)
 	}
 }

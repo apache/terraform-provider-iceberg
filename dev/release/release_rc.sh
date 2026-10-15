@@ -138,23 +138,23 @@ if [ "${RELEASE_SIGN}" -gt 0 ]; then
     --repo "${repository}" \
     "${id}/${rc_tar_gz}.asc"
 
-  echo "Signing the binary checksums (SHA256SUMS) for the registry"
-  rm -rf binaries-rc
-  mkdir -p binaries-rc
-  gh release download "${rc_tag}" \
-    --dir binaries-rc \
-    --pattern "${sha256sums}" \
-    --repo "${repository}" \
-    --skip-existing
-  (
-    cd binaries-rc
-    gpg --batch --yes --detach-sign --output "${sha256sums}.sig" "${sha256sums}"
-  )
-  echo "Adding the SHA256SUMS signature to the prerelease"
-  gh release upload "${rc_tag}" \
-    --clobber \
-    --repo "${repository}" \
-    "binaries-rc/${sha256sums}.sig"
+  # Signatures are now done by CI via ATR
+  # rm -rf binaries-rc
+  # mkdir -p binaries-rc
+  # gh release download "${rc_tag}" \
+  #   --dir binaries-rc \
+  #   --pattern "${sha256sums}" \
+  #   --repo "${repository}" \
+  #   --skip-existing
+  # (
+  #   cd binaries-rc
+  #   gpg --batch --yes --detach-sign --output "${sha256sums}.sig" "${sha256sums}"
+  # )
+  # echo "Adding the SHA256SUMS signature to the prerelease"
+  # gh release upload "${rc_tag}" \
+  #   --clobber \
+  #   --repo "${repository}" \
+  #   "binaries-rc/${sha256sums}.sig"
 fi
 
 if [ "${RELEASE_UPLOAD}" -gt 0 ]; then

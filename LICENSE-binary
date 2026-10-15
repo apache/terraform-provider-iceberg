@@ -219,6 +219,7 @@ This product bundles various third-party components under other open source
 licenses. This section summarizes those components and their licenses. See
 licenses-binary/ for text of these licenses.
 
+--- BEGIN GENERATED SECTION: dev/update_licenses.sh (do not edit by hand) ---
 
 BSD 2-Clause
 ------------
@@ -230,7 +231,6 @@ BSD 3-Clause
 ------------
 github.com/antlr4-go/antlr/v4
 github.com/golang/protobuf
-github.com/golang/snappy
 github.com/google/uuid
 github.com/klauspost/compress
 github.com/pierrec/lz4/v4
@@ -238,11 +238,11 @@ github.com/pmezard/go-difflib
 github.com/twmb/murmur3
 golang.org/x/exp
 golang.org/x/net
+golang.org/x/oauth2
 golang.org/x/sync
 golang.org/x/sys
 golang.org/x/term
 golang.org/x/text
-golang.org/x/xerrors
 google.golang.org/protobuf
 
 ISC License
@@ -256,15 +256,13 @@ atomicgo.dev/keyboard
 atomicgo.dev/schedule
 github.com/andybalholm/brotli
 github.com/cespare/xxhash/v2
+github.com/clipperhouse/uax29/v2
 github.com/creasty/defaults
 github.com/fatih/color
-github.com/go-viper/mapstructure/v2
 github.com/goccy/go-json
 github.com/goccy/go-yaml
 github.com/gookit/color
-github.com/hamba/avro/v2
 github.com/hashicorp/go-hclog
-github.com/json-iterator/go
 github.com/klauspost/cpuid/v2
 github.com/lithammer/fuzzysearch
 github.com/mattn/go-colorable
@@ -272,9 +270,9 @@ github.com/mattn/go-isatty
 github.com/mattn/go-runewidth
 github.com/mitchellh/go-testing-interface
 github.com/pterm/pterm
-github.com/rivo/uniseg
 github.com/stretchr/objx
 github.com/stretchr/testify
+github.com/twmb/avro
 github.com/xo/terminfo
 gopkg.in/yaml.v3
 
@@ -282,6 +280,7 @@ Mozilla Public License 2.0
 --------------------------
 github.com/hashicorp/go-plugin
 github.com/hashicorp/go-uuid
+github.com/hashicorp/golang-lru/v2
 github.com/hashicorp/terraform-plugin-framework
 github.com/hashicorp/terraform-plugin-framework-validators
 github.com/hashicorp/terraform-plugin-go
@@ -289,6 +288,8 @@ github.com/hashicorp/terraform-plugin-log
 github.com/hashicorp/terraform-registry-address
 github.com/hashicorp/terraform-svchost
 github.com/hashicorp/yamux
+
+--- END GENERATED SECTION ---
 
 
 ------------------------------------------------------------------------------------
@@ -298,6 +299,7 @@ texts are also in licenses-binary/.
 
 BSD 3-Clause
 ------------
+flate, in github.com/andybalholm/brotli
 arrow/flight/cookie_middleware.go, in github.com/apache/arrow-go/v18
 internal/sync/singleflight, in github.com/aws/aws-sdk-go-v2
 internal/sync/singleflight, in github.com/aws/smithy-go
@@ -306,10 +308,15 @@ encoding/xml/escape.go, in github.com/aws/smithy-go
 encoding/json/escape.go, in github.com/aws/smithy-go
 format.go, in github.com/cockroachdb/apd/v3
 loop.go, in github.com/cockroachdb/apd/v3
+simplelru/list.go, in github.com/hashicorp/golang-lru/v2
   (from the Go project)
 
 internal/snapref, in github.com/klauspost/compress
+snappy, in github.com/klauspost/compress
   (from the Snappy-Go project)
+
+s2, in github.com/klauspost/compress
+  (from the Snappy-Go project, with later changes by Klaus Post)
 
 MIT License
 -----------

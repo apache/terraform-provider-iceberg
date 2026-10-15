@@ -68,6 +68,22 @@ Before cutting a release candidate:
   `docs/` and `examples/` that reference them.
 * **Confirm the provider address** in [`main.go`](../main.go) is
   `registry.terraform.io/apache/iceberg`.
+* **Refresh the binary license inventory** by running
+  [`./dev/update_licenses.sh`](../dev/update_licenses.sh) and committing any
+  result. `LICENSE-binary`, `NOTICE-binary`, and `licenses-binary/` describe the
+  third-party code statically linked into the convenience binaries, and
+  [ASF policy](https://infra.apache.org/licensing-howto.html) is that they must
+  exactly represent what ships. They go stale whenever the dependency tree moves
+  — most often through an `// indirect` dependency that no review of `go.mod`
+  would flag. `./dev/update_licenses.sh --check` reports drift without writing.
+
+    The script regenerates the marked section of `LICENSE-binary` and the
+    per-module texts under `licenses-binary/`. Two things it can only report,
+    because they need a human: bundled code carrying a license other than its
+    own module's (listed by hand in the trailing section of `LICENSE-binary`),
+    and `NOTICE` files that `NOTICE-binary` has to reproduce. Misclassifications
+    belong in [`dev/licenses/overrides.tsv`](../dev/licenses/overrides.tsv), not
+    in the generated output.
 
 ## Publishing a Release Candidate (RC)
 
@@ -213,6 +229,11 @@ The final GitHub release carries exactly the files the registry requires: one
 `..._SHA256SUMS`, one `..._SHA256SUMS.sig` signed by the KEYS-registered key,
 and one `..._manifest.json`.
 
+> **Note:** Because the binaries are promoted rather than rebuilt, `go version -m`
+> on one reports the RC tag it was built from (`v0.7.0-rc1`). The filenames and
+> the registry metadata carry the final version, and those are what Terraform
+> resolves against.
+
 Within a few minutes the
 [Terraform Registry](https://registry.terraform.io/providers/apache/iceberg) and
 [OpenTofu Registry](https://search.opentofu.org/provider/apache/iceberg) detect
@@ -279,6 +300,9 @@ It expects `git`, `gpg`, `curl`, and `shasum`/`sha512sum` on your `PATH`.
 
 The RAT License check needs `java` and `unzip`, but can be skipped with `VERIFY_RAT=0`.
 Binary verification needs [`gh`](https://cli.github.com/) and can be skipped with `VERIFY_BINARY=0`.
+
+The binaries are named with the final version, but `go version -m` reports the RC
+tag they were built from. That is expected, and stays true of the final release.
 
 A valid signature from a key in the `KEYS` file, a matching checksum, a clean RAT
 check, verified binaries, and a clean build and test is a `+1`.

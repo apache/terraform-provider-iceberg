@@ -131,18 +131,24 @@ jobs:
             echo "::error::${final_tag} does not point at HEAD ${head_sha}"
             exit 1
           fi
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
+        id: import_gpg
+        with:
+          gpg_private_key: ${{ secrets.ICEBERG_GPG_SECRET_KEY }}
 
       - name: Build artifacts with GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: '~> v2'
           # Build only; signing and publishing happen later.
-          args: release --clean --skip=sign,publish,validate
+          args: release --clean --skip=publish,validate
         env:
           # Name artifacts with the final version (0.7.0, not 0.7.0-rc1) so the
           # voted binaries can be promoted unchanged. Skipping validate lets this
           # override GoReleaser's tag-derived version.
           GORELEASER_CURRENT_TAG: v${{ steps.version.outputs.version }}
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
 
       - name: Verify embedded module version
         env:

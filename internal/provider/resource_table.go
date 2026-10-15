@@ -204,7 +204,7 @@ func (r *icebergTableResource) Create(ctx context.Context, req resource.CreateRe
 	// the schema for duplicate field IDs.
 	schema.assignFieldIDs(0)
 	if err := schema.validateFieldIDs(); err != nil {
-		resp.Diagnostics.AddError("duplicate field id", err.Error())
+		resp.Diagnostics.AddError("invalid field id", err.Error())
 
 		return
 	}
@@ -462,7 +462,7 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 	planSchema.resolveFieldIDs(&stateSchema)
 	planSchema.assignFieldIDs(int64(tbl.Metadata().LastColumnID()))
 	if err := planSchema.validateFieldIDs(); err != nil {
-		diags.AddError("duplicate field id", err.Error())
+		diags.AddError("invalid field id", err.Error())
 
 		return nil
 	}
