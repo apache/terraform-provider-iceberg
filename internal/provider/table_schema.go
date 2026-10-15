@@ -491,20 +491,29 @@ func (s icebergTableSortOrder) AttrTypes() map[string]attr.Type {
 	}
 }
 
+// MarshalJSON always emits "order-id" because iceberg-go requires it. An unset
+// ID defaults to the unsorted order ID when there are no fields and to the
+// initial sort order ID otherwise.
 func (s icebergTableSortOrder) MarshalJSON() ([]byte, error) {
 	type Alias struct {
-		OrderID *int                    `json:"order-id,omitempty"`
+		OrderID int                     `json:"order-id"`
 		Fields  []icebergTableSortField `json:"fields"`
 	}
-	var orderID *int
-	if !s.OrderID.IsNull() && !s.OrderID.IsUnknown() {
-		val := int(s.OrderID.ValueInt64())
-		orderID = &val
+	orderID := table.InitialSortOrderID
+	switch {
+	case !s.OrderID.IsNull() && !s.OrderID.IsUnknown():
+		orderID = int(s.OrderID.ValueInt64())
+	case len(s.Fields) == 0:
+		orderID = table.UnsortedSortOrderID
+	}
+	fields := s.Fields
+	if fields == nil {
+		fields = []icebergTableSortField{}
 	}
 
 	return json.Marshal(&Alias{
 		OrderID: orderID,
-		Fields:  s.Fields,
+		Fields:  fields,
 	})
 }
 
