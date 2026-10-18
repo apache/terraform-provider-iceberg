@@ -32,6 +32,12 @@ func tableSchemaResourceAttributes() map[string]rscschema.Attribute {
 			Optional:    true,
 			Computed:    true,
 		},
+		"identifier_field_ids": rscschema.ListAttribute{
+			Description: "Field IDs that identify a row (Iceberg identifier-field-ids). Omitted values are preserved across unrelated schema updates.",
+			ElementType: types.Int64Type,
+			Optional:    true,
+			Computed:    true,
+		},
 		"fields": rscschema.ListNestedAttribute{
 			Description: "The fields of the schema",
 			Required:    true,
@@ -46,6 +52,11 @@ func tableSchemaDataSourceAttributes() map[string]dschema.Attribute {
 	return map[string]dschema.Attribute{
 		"id": dschema.Int64Attribute{
 			Description: "The schema ID.",
+			Computed:    true,
+		},
+		"identifier_field_ids": dschema.ListAttribute{
+			Description: "Field IDs that identify a row (Iceberg identifier-field-ids).",
+			ElementType: types.Int64Type,
 			Computed:    true,
 		},
 		"fields": dschema.ListNestedAttribute{
