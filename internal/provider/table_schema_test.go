@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/apache/iceberg-go"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -240,4 +241,90 @@ func TestAssignFieldIDsIntoReservedRange(t *testing.T) {
 	if err := s.validateFieldIDs(); err == nil || !strings.Contains(err.Error(), "id 2147483448") {
 		t.Fatalf("expected reserved id error, got %v", err)
 	}
+}
+
+func TestSchemaIdentifierFieldIDsRoundTrip(t *testing.T) {
+	icebergSchema := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+		iceberg.NestedField{ID: 1, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		iceberg.NestedField{ID: 2, Name: "data", Type: iceberg.PrimitiveTypes.String, Required: false},
+	)
+
+	var tfSchema icebergTableSchema
+	if err := tfSchema.FromIceberg(icebergSchema); err != nil {
+		t.Fatalf("FromIceberg: %v", err)
+	}
+
+	ids, err := int64ListElements(tfSchema.IdentifierFieldIDs)
+	if err != nil {
+		t.Fatalf("int64ListElements: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != 1 {
+		t.Fatalf("expected identifier_field_ids [1], got %v", ids)
+	}
+
+	roundTripped, err := tfSchema.ToIceberg()
+	if err != nil {
+		t.Fatalf("ToIceberg: %v", err)
+	}
+	if len(roundTripped.IdentifierFieldIDs) != 1 || roundTripped.IdentifierFieldIDs[0] != 1 {
+		t.Fatalf("expected round-trip identifier-field-ids [1], got %v", roundTripped.IdentifierFieldIDs)
+	}
+}
+
+func TestPreserveIdentifierFieldIDs(t *testing.T) {
+	current := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+		iceberg.NestedField{ID: 1, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+	)
+
+	t.Run("omitted plan preserves current", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFieldIDs: types.ListNull(types.Int64Type),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
+			},
+		}
+		plan.preserveIdentifierFieldIDs(current)
+		ids, err := int64ListElements(plan.IdentifierFieldIDs)
+		if err != nil {
+			t.Fatalf("int64ListElements: %v", err)
+		}
+		if len(ids) != 1 || ids[0] != 1 {
+			t.Fatalf("expected preserved [1], got %v", ids)
+		}
+	})
+
+	t.Run("explicit empty list clears", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFieldIDs: types.ListValueMust(types.Int64Type, []attr.Value{}),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
+			},
+		}
+		plan.preserveIdentifierFieldIDs(current)
+		ids, err := int64ListElements(plan.IdentifierFieldIDs)
+		if err != nil {
+			t.Fatalf("int64ListElements: %v", err)
+		}
+		if len(ids) != 0 {
+			t.Fatalf("expected cleared identifiers, got %v", ids)
+		}
+	})
+
+	t.Run("explicit plan list kept", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFieldIDs: types.ListValueMust(types.Int64Type, []attr.Value{types.Int64Value(1)}),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
+				{ID: types.Int64Value(2), Name: "data", Type: "string", Required: false},
+			},
+		}
+		plan.preserveIdentifierFieldIDs(current)
+		ids, err := int64ListElements(plan.IdentifierFieldIDs)
+		if err != nil {
+			t.Fatalf("int64ListElements: %v", err)
+		}
+		if len(ids) != 1 || ids[0] != 1 {
+			t.Fatalf("expected plan [1], got %v", ids)
+		}
+	})
 }

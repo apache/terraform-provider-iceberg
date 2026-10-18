@@ -467,6 +467,10 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
+	// Keep identifier-field-ids when the plan omits them so unrelated field
+	// changes do not silently clear row-identity metadata.
+	planSchema.preserveIdentifierFieldIDs(tbl.Schema())
+
 	planIceberg, err := planSchema.ToIceberg()
 	if err != nil {
 		diags.AddError("failed to convert plan schema", err.Error())
@@ -480,13 +484,14 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
-	// Normalize by comparing the JSON of the fields list only.
-	// This ignores the top-level schema-id and any other schema-level metadata
-	// while ensuring every field change (name, type, id, etc.) is detected.
+	// Compare fields and identifier-field-ids. Ignore top-level schema-id.
 	planFieldsJson, _ := json.Marshal(planIceberg.Fields())
 	stateFieldsJson, _ := json.Marshal(stateIceberg.Fields())
+	planIdentJson, _ := json.Marshal(planIceberg.IdentifierFieldIDs)
+	stateIdentJson, _ := json.Marshal(stateIceberg.IdentifierFieldIDs)
 
-	if string(planFieldsJson) == string(stateFieldsJson) {
+	if string(planFieldsJson) == string(stateFieldsJson) &&
+		string(planIdentJson) == string(stateIdentJson) {
 		return nil
 	}
 

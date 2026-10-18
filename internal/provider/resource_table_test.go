@@ -1060,3 +1060,95 @@ resource "iceberg_table" "test" {
 }
 `, tableName, colName)
 }
+
+func testAccIcebergTableIdentifierFieldsConfig(providerCfg, tableName string, withExtra bool, identifierIDs string) string {
+	extra := ""
+	if withExtra {
+		extra = `,
+      {
+        id       = 2
+        name     = "extra"
+        type     = "string"
+        required = false
+      }`
+	}
+	identifiers := ""
+	if identifierIDs != "" {
+		identifiers = fmt.Sprintf("\n    identifier_field_ids = %s", identifierIDs)
+	}
+
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_ident" {
+  name = ["db_ident"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_ident.name
+  name      = "%s"
+  schema = {%s
+    fields = [
+      {
+        id       = 1
+        name     = "id"
+        type     = "long"
+        required = true
+      }%s
+    ]
+  }
+}
+`, tableName, identifiers, extra)
+}
+
+func TestAccIcebergTablePreserveIdentifierFieldIDs(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "identifier_fields_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableIdentifierFieldsConfig(providerCfg, tableName, false, "[1]"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.identifier_field_ids.#", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.identifier_field_ids.0", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.#", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+				),
+			},
+			{
+				// Unrelated schema change omits identifier_field_ids; they must
+				// remain [1] rather than being cleared on replace-schema.
+				Config: testAccIcebergTableIdentifierFieldsConfig(providerCfg, tableName, true, ""),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.identifier_field_ids.#", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.identifier_field_ids.0", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.#", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.name", "extra"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "1"),
+				),
+			},
+			{
+				ResourceName:      "iceberg_table.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"user_properties.%",
+				},
+			},
+			{
+				// Explicit empty list clears identifier fields.
+				Config: testAccIcebergTableIdentifierFieldsConfig(providerCfg, tableName, true, "[]"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.identifier_field_ids.#", "0"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.#", "2"),
+				),
+			},
+		},
+	})
+}
