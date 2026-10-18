@@ -23,8 +23,9 @@
 #      "Terraform Build Release Candidate" workflow (../../.github/workflows/tf-release.yml).
 #   2. Waits for that workflow to publish the GitHub prerelease, then downloads
 #      its artifacts.
-#   3. Signs the source tarball (.asc) and the binary SHA256SUMS (.sig) with your
-#      KEYS-registered GPG key and uploads the signatures back to the prerelease.
+#   3. Signs the source tarball (.asc) with your KEYS-registered GPG key and
+#      uploads the signature back to the prerelease. CI signs the binary
+#      SHA256SUMS (see docs/releasing.md).
 #   4. Uploads the signed *source* release to the Apache dev SVN (the artifact the
 #      PMC votes on). Convenience binaries stay on the GitHub prerelease.
 #   5. Prints the [VOTE] email for dev@iceberg.apache.org.
@@ -138,7 +139,7 @@ if [ "${RELEASE_SIGN}" -gt 0 ]; then
     --repo "${repository}" \
     "${id}/${rc_tar_gz}.asc"
 
-  # Signatures are now done by CI via ATR
+  # The binary SHA256SUMS is now signed in CI (see docs/releasing.md).
   # rm -rf binaries-rc
   # mkdir -p binaries-rc
   # gh release download "${rc_tag}" \

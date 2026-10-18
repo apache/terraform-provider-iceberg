@@ -17,8 +17,7 @@
 
 # On a release-candidate tag (e.g. v0.7.0-rc1), builds the source tarball and
 # convenience binaries and publishes them as a GitHub prerelease. The release
-# manager drives the rest from dev/release/release_rc.sh (see docs/releasing.md);
-# CI never signs.
+# manager drives the rest from dev/release/release_rc.sh (see docs/releasing.md).
 
 name: Terraform Build Release Candidate
 
@@ -111,7 +110,7 @@ jobs:
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: '~> v2'
-          # Build only; signing and publishing happen later.
+          # Build and sign; publishing happens later.
           args: release --clean --skip=publish,validate
         env:
           # Name artifacts with the final version (0.7.0, not 0.7.0-rc1) so the
@@ -136,6 +135,7 @@ jobs:
           path: |
             dist/*.zip
             dist/*_SHA256SUMS
+            dist/*_SHA256SUMS.sig
             dist/*_manifest.json
           if-no-files-found: error
 
@@ -169,7 +169,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          # release_rc.sh adds signatures afterwards; CI never signs.
+          # release_rc.sh adds the source signature afterwards.
           gh release create "${TAG}" \
             --prerelease \
             --verify-tag \

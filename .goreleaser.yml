@@ -25,9 +25,7 @@
 # The official binary layout required by the registries is documented at
 # https://developer.hashicorp.com/terraform/registry/providers/publishing
 #
-# Signing of the SHA256SUMS file is performed locally by the release manager
-# with their KEYS-registered GPG key, so the `signs` block below is skipped in
-# CI (`--skip=sign`). See docs/releasing.md for the manual signing step.
+# The `signs` block below signs the SHA256SUMS file in CI. See docs/releasing.md.
 version: 2
 
 # The Terraform Registry requires the binary and archives to be named

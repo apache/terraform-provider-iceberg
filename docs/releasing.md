@@ -47,9 +47,13 @@ The steps include:
 * Terraform / OpenTofu Registry Access
     * The [`apache` namespace on the Terraform Registry](https://registry.terraform.io/providers/apache)
       must have the `terraform-provider-iceberg` provider claimed, with the
-      release manager's GPG public key (the same key in `KEYS`) registered under
+      Iceberg project GPG public key (the key CI uses to sign `SHA256SUMS`,
+      also published in `KEYS`) registered under
       **Settings → GPG Keys**. The OpenTofu Registry mirrors GitHub Releases for
-      the same namespace and requires no separate upload.
+      the same namespace, but verifies signatures against the keys under
+      `keys/a/apache/iceberg/` in
+      [`opentofu/registry`](https://github.com/opentofu/registry), so the same
+      public key must be submitted there.
 * Tooling installed locally
     * `git`, `svn`, `gpg`, and `shasum`/`sha512sum`.
     * [`gh`](https://cli.github.com/) (GitHub CLI), used to watch the build and
@@ -145,12 +149,12 @@ The script:
 
 1. Tags `v<version>-rc<rc>` and pushes it, which triggers the
    [`Terraform Build Release Candidate`](../.github/workflows/tf-release.yml)
-   workflow. The workflow builds the source tarball and the convenience binaries
-   and publishes them as a GitHub **prerelease**.
-2. Waits for the workflow, downloads the artifacts, and signs them with your
-   KEYS-registered GPG key — a detached `.asc` over the source tarball and a
-   detached `.sig` over the binary `SHA256SUMS` — then uploads the signatures
-   back onto the prerelease.
+   workflow. The workflow builds the source tarball and the convenience binaries,
+   signs the binary `SHA256SUMS` (detached `.sig`) with the Iceberg project GPG
+   key, and publishes them as a GitHub **prerelease**.
+2. Waits for the workflow, downloads the source tarball, signs it with your
+   KEYS-registered GPG key (detached `.asc`), and uploads the signature back
+   onto the prerelease.
 3. Uploads the signed **source** release to the Apache dev SVN at
    `dev/iceberg/apache-iceberg-terraform-<version>-rc<rc>/`. Only the source is
    voted on and archived in SVN; the convenience binaries stay on the GitHub
@@ -326,9 +330,9 @@ gpg --armor --export <YOUR KEY ID HERE> >> KEYS # append public key block
 svn commit -m "add key for <YOUR NAME HERE>" # this requires Iceberg PMC privileges
 ```
 
-Register the **same** key under your account on the Terraform Registry
-(**Settings → GPG Keys**) so the registry can verify the `SHA256SUMS.sig` you
-attach to GitHub Releases.
+The `SHA256SUMS.sig` on GitHub Releases is signed in CI by the Iceberg project
+GPG key, not your personal key. That key's public half must be in `KEYS` and
+registered with both registries (see [Requirements](#requirements)).
 
 > **Note:** Updating the `KEYS` artifact in the `release/` distribution requires
 > Iceberg PMC privileges. Please work with a PMC member to update the file.
