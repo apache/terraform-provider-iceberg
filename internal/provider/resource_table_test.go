@@ -1272,6 +1272,10 @@ func updateActions(t *testing.T, updates []table.Update) string {
 	out := ""
 	for _, u := range raw {
 		out += u["action"].(string)
+		if s, ok := u["schema"].(map[string]any); ok {
+			b, _ := json.Marshal(s["schema-id"])
+			out += "(" + string(b) + ")"
+		}
 		for _, k := range []string{"schema-id", "spec-id", "sort-order-id"} {
 			if v, ok := u[k]; ok {
 				b, _ := json.Marshal(v)
@@ -1308,7 +1312,7 @@ func TestCalculateSchemaUpdatesReusesExistingSchema(t *testing.T) {
 	}{
 		"unchanged":            {plan: schemaV1, want: ""},
 		"revert to schema 0":   {plan: schemaV0, want: "set-current-schema(0);"},
-		"genuinely new schema": {plan: schemaNew, want: "add-schema;set-current-schema(-1);"},
+		"genuinely new schema": {plan: schemaNew, want: "add-schema(2);set-current-schema(2);"},
 	}
 
 	for name, tc := range cases {

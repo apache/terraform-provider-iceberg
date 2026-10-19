@@ -446,6 +446,14 @@ func (r *icebergTableResource) calculatePropertyUpdates(ctx context.Context, pla
 	return updates
 }
 
+// calculateSchemaUpdates, calculatePartitionUpdates and calculateSortOrderUpdates
+// each make the planned schema, spec or sort order current in three steps:
+//
+//  1. It is already current: no updates.
+//  2. It matches one already in the table's metadata: set that existing ID as
+//     current. The catalog dedupes on add (it would keep the old ID and add
+//     nothing), so adding it again and pointing at a new or last-added ID fails.
+//  3. It is new: add it and set it as current.
 func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan, state *icebergTableResourceModel, tbl *table.Table, diags *diag.Diagnostics) []table.Update {
 	var planSchema, stateSchema icebergTableSchema
 	d := plan.Schema.As(ctx, &planSchema, basetypes.ObjectAsOptions{})
@@ -497,19 +505,25 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
+	if tbl.Schema().Equals(planIceberg) {
+		return nil
+	}
+
+	// Returning to an earlier schema: point back at its existing ID.
+	maxSchemaID := 0
 	for _, existing := range tbl.Metadata().Schemas() {
 		if existing.Equals(planIceberg) {
-			if existing.ID == tbl.Schema().ID {
-				return nil
-			}
-
 			return []table.Update{table.NewSetCurrentSchemaUpdate(existing.ID)}
 		}
+		maxSchemaID = max(maxSchemaID, existing.ID)
 	}
+
+	// A new schema: add it under the next unused ID and make it current.
+	planIceberg.ID = maxSchemaID + 1
 
 	return []table.Update{
 		table.NewAddSchemaUpdate(planIceberg),
-		table.NewSetCurrentSchemaUpdate(-1),
+		table.NewSetCurrentSchemaUpdate(planIceberg.ID),
 	}
 }
 
@@ -542,12 +556,14 @@ func (r *icebergTableResource) calculatePartitionUpdates(ctx context.Context, pl
 		return nil
 	}
 
+	// Returning to an earlier spec: point back at its existing ID.
 	for _, existing := range tbl.Metadata().PartitionSpecs() {
 		if existing.CompatibleWith(&newIcebergSpec) {
 			return []table.Update{table.NewSetDefaultSpecUpdate(existing.ID())}
 		}
 	}
 
+	// A new spec: add it and make it the default.
 	return []table.Update{
 		table.NewAddPartitionSpecUpdate(&newIcebergSpec, false),
 		table.NewSetDefaultSpecUpdate(-1),
@@ -582,12 +598,14 @@ func (r *icebergTableResource) calculateSortOrderUpdates(ctx context.Context, pl
 		return nil
 	}
 
+	// Returning to an earlier sort order: point back at its existing ID.
 	for _, existing := range tbl.Metadata().SortOrders() {
 		if sameSortFields(existing, newIcebergOrder) {
 			return []table.Update{table.NewSetDefaultSortOrderUpdate(existing.OrderID())}
 		}
 	}
 
+	// A new sort order: add it and make it the default.
 	return []table.Update{
 		table.NewAddSortOrderUpdate(&newIcebergOrder),
 		table.NewSetDefaultSortOrderUpdate(-1),
