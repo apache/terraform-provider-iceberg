@@ -35,7 +35,7 @@ permissions:
 jobs:
   lint-and-test:
     name: ${{ matrix.os }} go${{ matrix.go }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -64,8 +64,11 @@ jobs:
       uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
     - name: Run tests
       run: go test -v ./...
+    # GitHub-hosted macOS and Windows runners cannot run the Linux containers
+    # in dev/docker-compose.yml, so integration tests only run on Linux.
     - name: Run integration tests
+      if: ${{ runner.os == 'Linux' }}
       run: make test-integration
     - name: Show debug logs
-      if: ${{ failure() }}
+      if: ${{ failure() && runner.os == 'Linux' }}
       run: docker compose -f dev/docker-compose.yml logs
