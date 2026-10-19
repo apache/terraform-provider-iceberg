@@ -15,11 +15,16 @@
 package provider
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
 	"testing"
 
+	"github.com/apache/iceberg-go/table"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
@@ -1059,4 +1064,347 @@ resource "iceberg_table" "test" {
   }
 }
 `, tableName, colName)
+}
+
+func TestAccIcebergTableRevertToExistingMetadata(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "revert_test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableRevertConfig(providerCfg, tableName, false, "asc"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+					resource.TestCheckNoResourceAttr("iceberg_table.test", "partition_spec"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.order_id", "1"),
+				),
+			},
+			{
+				Config: testAccIcebergTableRevertConfig(providerCfg, tableName, true, "desc"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.spec_id", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.order_id", "2"),
+				),
+			},
+			{
+				Config: testAccIcebergTableRevertConfig(providerCfg, tableName, false, "asc"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.#", "2"),
+					resource.TestCheckNoResourceAttr("iceberg_table.test", "partition_spec"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.order_id", "1"),
+				),
+			},
+		},
+	})
+}
+
+func testAccIcebergTableRevertConfig(providerCfg, tableName string, evolved bool, sortDirection string) string {
+	extraField, partitionSpec := "", ""
+	if evolved {
+		extraField = `,
+      {
+        name     = "b"
+        type     = "string"
+        required = false
+      }`
+		partitionSpec = `
+  partition_spec = {
+    fields = [
+      {
+        source_ids = [2]
+        name       = "ts_day"
+        transform  = "day"
+      }
+    ]
+  }`
+	}
+
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_revert" {
+  name = ["db_revert"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_revert.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        name     = "id"
+        type     = "long"
+        required = true
+      },
+      {
+        name     = "ts"
+        type     = "timestamp"
+        required = false
+      }%s
+    ]
+  }%s
+  sort_order = {
+    fields = [
+      {
+        source_id  = 1
+        transform  = "identity"
+        direction  = "%s"
+        null_order = "nulls-first"
+      }
+    ]
+  }
+}
+`, tableName, extraField, partitionSpec, sortDirection)
+}
+
+// historyMetadata is a table whose current schema, spec, and sort order are
+// the last of several, so the earlier ones can be returned to.
+const historyMetadata = `{
+  "format-version": 2,
+  "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+  "location": "s3://bucket/t",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1602638573590,
+  "last-column-id": 3,
+  "current-schema-id": 1,
+  "schemas": [
+    {"type": "struct", "schema-id": 0, "fields": [
+      {"id": 1, "name": "id", "required": true, "type": "long"},
+      {"id": 2, "name": "ts", "required": false, "type": "timestamp"}
+    ]},
+    {"type": "struct", "schema-id": 1, "fields": [
+      {"id": 1, "name": "id", "required": true, "type": "long"},
+      {"id": 2, "name": "ts", "required": false, "type": "timestamp"},
+      {"id": 3, "name": "b", "required": false, "type": "string"}
+    ]}
+  ],
+  "default-spec-id": 1,
+  "partition-specs": [
+    {"spec-id": 0, "fields": []},
+    {"spec-id": 1, "fields": [{"source-id": 2, "field-id": 1000, "name": "ts_day", "transform": "day"}]}
+  ],
+  "last-partition-id": 1000,
+  "default-sort-order-id": 2,
+  "sort-orders": [
+    {"order-id": 0, "fields": []},
+    {"order-id": 1, "fields": [{"source-id": 1, "transform": "identity", "direction": "asc", "null-order": "nulls-first"}]},
+    {"order-id": 2, "fields": [{"source-id": 1, "transform": "identity", "direction": "desc", "null-order": "nulls-last"}]}
+  ],
+  "properties": {},
+  "snapshots": [],
+  "snapshot-log": [],
+  "metadata-log": []
+}`
+
+func historyTable(t *testing.T) *table.Table {
+	t.Helper()
+	meta, err := table.ParseMetadataString(historyMetadata)
+	if err != nil {
+		t.Fatalf("parse metadata: %v", err)
+	}
+
+	return table.New(table.Identifier{"db", "t"}, meta, "s3://bucket/t/metadata/v1.json", nil, nil)
+}
+
+func objectFromJSON[T any](t *testing.T, attrTypes func(T) types.Object, raw string) types.Object {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		t.Fatalf("unmarshal %s: %v", raw, err)
+	}
+
+	return attrTypes(v)
+}
+
+func schemaObject(t *testing.T, raw string) types.Object {
+	return objectFromJSON(t, func(s icebergTableSchema) types.Object {
+		obj, d := types.ObjectValueFrom(context.Background(), icebergTableSchema{}.AttrTypes(), s)
+		if d.HasError() {
+			t.Fatalf("schema object: %v", d)
+		}
+
+		return obj
+	}, raw)
+}
+
+func specObject(t *testing.T, raw string) types.Object {
+	return objectFromJSON(t, func(s icebergTablePartitionSpec) types.Object {
+		s.SpecID = types.Int64Unknown()
+		obj, d := types.ObjectValueFrom(context.Background(), icebergTablePartitionSpec{}.AttrTypes(), s)
+		if d.HasError() {
+			t.Fatalf("spec object: %v", d)
+		}
+
+		return obj
+	}, raw)
+}
+
+func sortObject(t *testing.T, raw string) types.Object {
+	return objectFromJSON(t, func(s icebergTableSortOrder) types.Object {
+		s.OrderID = types.Int64Unknown()
+		obj, d := types.ObjectValueFrom(context.Background(), icebergTableSortOrder{}.AttrTypes(), s)
+		if d.HasError() {
+			t.Fatalf("sort order object: %v", d)
+		}
+
+		return obj
+	}, raw)
+}
+
+func updateActions(t *testing.T, updates []table.Update) string {
+	t.Helper()
+	b, err := json.Marshal(updates)
+	if err != nil {
+		t.Fatalf("marshal updates: %v", err)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("unmarshal updates: %v", err)
+	}
+	out := ""
+	for _, u := range raw {
+		out += u["action"].(string)
+		for _, k := range []string{"schema-id", "spec-id", "sort-order-id"} {
+			if v, ok := u[k]; ok {
+				b, _ := json.Marshal(v)
+				out += "(" + string(b) + ")"
+			}
+		}
+		out += ";"
+	}
+
+	return out
+}
+
+const (
+	schemaV0 = `{"schema-id": 0, "fields": [
+  {"id": 1, "name": "id", "required": true, "type": "long"},
+  {"id": 2, "name": "ts", "required": false, "type": "timestamp"}]}`
+	schemaV1 = `{"schema-id": 1, "fields": [
+  {"id": 1, "name": "id", "required": true, "type": "long"},
+  {"id": 2, "name": "ts", "required": false, "type": "timestamp"},
+  {"id": 3, "name": "b", "required": false, "type": "string"}]}`
+	schemaNew = `{"schema-id": 1, "fields": [
+  {"id": 1, "name": "id", "required": true, "type": "long"},
+  {"id": 2, "name": "ts", "required": false, "type": "timestamp"},
+  {"id": 4, "name": "c", "required": false, "type": "string"}]}`
+)
+
+func TestCalculateSchemaUpdatesReusesExistingSchema(t *testing.T) {
+	tbl := historyTable(t)
+	r := &icebergTableResource{}
+
+	cases := map[string]struct {
+		plan string
+		want string
+	}{
+		"unchanged":            {plan: schemaV1, want: ""},
+		"revert to schema 0":   {plan: schemaV0, want: "set-current-schema(0);"},
+		"genuinely new schema": {plan: schemaNew, want: "add-schema;set-current-schema(-1);"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var diags diag.Diagnostics
+			plan := &icebergTableResourceModel{Schema: schemaObject(t, tc.plan)}
+			state := &icebergTableResourceModel{Schema: schemaObject(t, schemaV1)}
+			got := updateActions(t, r.calculateSchemaUpdates(context.Background(), plan, state, tbl, &diags))
+			if diags.HasError() {
+				t.Fatalf("unexpected diagnostics: %v", diags)
+			}
+			if got != tc.want {
+				t.Errorf("updates = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCalculatePartitionUpdatesReusesExistingSpec(t *testing.T) {
+	tbl := historyTable(t)
+	r := &icebergTableResource{}
+
+	cases := map[string]struct {
+		plan types.Object
+		want string
+	}{
+		"unchanged": {
+			plan: specObject(t, `{"fields": [{"source-ids": [2], "name": "ts_day", "transform": "day"}]}`),
+			want: "",
+		},
+		"removed from config": {
+			plan: types.ObjectUnknown(icebergTablePartitionSpec{}.AttrTypes()),
+			want: "set-default-spec(0);",
+		},
+		"explicitly empty": {
+			plan: specObject(t, `{"fields": []}`),
+			want: "set-default-spec(0);",
+		},
+		"genuinely new spec": {
+			plan: specObject(t, `{"fields": [{"source-ids": [1], "name": "id_b", "transform": "bucket[4]"}]}`),
+			want: "add-spec;set-default-spec(-1);",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var diags diag.Diagnostics
+			plan := &icebergTableResourceModel{PartitionSpec: tc.plan}
+			got := updateActions(t, r.calculatePartitionUpdates(context.Background(), plan, tbl, &diags))
+			if diags.HasError() {
+				t.Fatalf("unexpected diagnostics: %v", diags)
+			}
+			if got != tc.want {
+				t.Errorf("updates = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCalculateSortOrderUpdatesReusesExistingOrder(t *testing.T) {
+	tbl := historyTable(t)
+	r := &icebergTableResource{}
+
+	cases := map[string]struct {
+		plan types.Object
+		want string
+	}{
+		"unchanged with unknown order id": {
+			plan: sortObject(t, `{"fields": [{"source-id": 1, "transform": "identity", "direction": "desc", "null-order": "nulls-last"}]}`),
+			want: "",
+		},
+		"revert to order 1": {
+			plan: sortObject(t, `{"fields": [{"source-id": 1, "transform": "identity", "direction": "asc", "null-order": "nulls-first"}]}`),
+			want: "set-default-sort-order(1);",
+		},
+		"removed from config": {
+			plan: types.ObjectUnknown(icebergTableSortOrder{}.AttrTypes()),
+			want: "set-default-sort-order(0);",
+		},
+		"genuinely new order": {
+			plan: sortObject(t, `{"fields": [{"source-id": 2, "transform": "identity", "direction": "asc", "null-order": "nulls-first"}]}`),
+			want: "add-sort-order;set-default-sort-order(-1);",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var diags diag.Diagnostics
+			plan := &icebergTableResourceModel{SortOrder: tc.plan}
+			got := updateActions(t, r.calculateSortOrderUpdates(context.Background(), plan, tbl, &diags))
+			if diags.HasError() {
+				t.Fatalf("unexpected diagnostics: %v", diags)
+			}
+			if got != tc.want {
+				t.Errorf("updates = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
