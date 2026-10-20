@@ -446,6 +446,14 @@ func (r *icebergTableResource) calculatePropertyUpdates(ctx context.Context, pla
 	return updates
 }
 
+// calculateSchemaUpdates, calculatePartitionUpdates and calculateSortOrderUpdates
+// each make the planned schema, spec or sort order current in three steps:
+//
+//  1. It is already current: no updates.
+//  2. It matches one already in the table's metadata: set that existing ID as
+//     current. The catalog dedupes on add (it would keep the old ID and add
+//     nothing), so adding it again and pointing at a new or last-added ID fails.
+//  3. It is new: add it and set it as current.
 func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan, state *icebergTableResourceModel, tbl *table.Table, diags *diag.Diagnostics) []table.Update {
 	var planSchema, stateSchema icebergTableSchema
 	d := plan.Schema.As(ctx, &planSchema, basetypes.ObjectAsOptions{})
@@ -497,121 +505,130 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
-	// Find the highest existing schema ID to ensure the new one is unique.
-	maxSchemaID := int64(0)
-	for _, s := range tbl.Metadata().Schemas() {
-		if int64(s.ID) > maxSchemaID {
-			maxSchemaID = int64(s.ID)
-		}
-	}
-
-	newSchemaID := maxSchemaID + 1
-	planSchema.ID = types.Int64Value(newSchemaID)
-	planIceberg, err = planSchema.ToIceberg()
-	if err != nil {
-		diags.AddError("failed to convert plan schema with new ID", err.Error())
-
+	if tbl.Schema().Equals(planIceberg) {
 		return nil
 	}
 
-	// Return two events:
-	// 1. Add the schema with new schema ID.
-	// 2. Set the table schema explicitly to that new ID.
+	// Returning to an earlier schema: point back at its existing ID.
+	maxSchemaID := 0
+	for _, existing := range tbl.Metadata().Schemas() {
+		if existing.Equals(planIceberg) {
+			return []table.Update{table.NewSetCurrentSchemaUpdate(existing.ID)}
+		}
+		maxSchemaID = max(maxSchemaID, existing.ID)
+	}
+
+	// A new schema: add it under the next unused ID and make it current.
+	planIceberg.ID = maxSchemaID + 1
+
 	return []table.Update{
 		table.NewAddSchemaUpdate(planIceberg),
-		table.NewSetCurrentSchemaUpdate(int(newSchemaID)),
+		table.NewSetCurrentSchemaUpdate(planIceberg.ID),
 	}
 }
 
 func (r *icebergTableResource) calculatePartitionUpdates(ctx context.Context, plan *icebergTableResourceModel, tbl *table.Table, diags *diag.Diagnostics) []table.Update {
-	spec := tbl.Spec()
-	if plan.PartitionSpec.IsUnknown() {
-		if spec.NumFields() > 0 {
-			// Create a new unpartitioned spec and set it as default
-			unpartitionedSpec := iceberg.NewPartitionSpec()
-
-			return []table.Update{
-				table.NewAddPartitionSpecUpdate(&unpartitionedSpec, false),
-				table.NewSetDefaultSpecUpdate(-1),
-			}
-		}
-
-		return nil
-	}
-
 	if plan.PartitionSpec.IsNull() {
 		return nil
 	}
 
-	var planSpec icebergTablePartitionSpec
-	d := plan.PartitionSpec.As(ctx, &planSpec, basetypes.ObjectAsOptions{})
-	diags.Append(d...)
+	newIcebergSpec := iceberg.NewPartitionSpec()
+	if !plan.PartitionSpec.IsUnknown() {
+		var planSpec icebergTablePartitionSpec
+		d := plan.PartitionSpec.As(ctx, &planSpec, basetypes.ObjectAsOptions{})
+		diags.Append(d...)
 
-	if diags.HasError() {
+		if diags.HasError() {
+			return nil
+		}
+
+		spec, err := planSpec.ToIceberg()
+		if err != nil {
+			diags.AddError("failed to convert partition spec", err.Error())
+
+			return nil
+		}
+		newIcebergSpec = *spec
+	}
+
+	current := tbl.Spec()
+	if current.CompatibleWith(&newIcebergSpec) {
 		return nil
 	}
 
-	newIcebergSpec, err := planSpec.ToIceberg()
-	if err != nil {
-		diags.AddError("failed to convert partition spec", err.Error())
-
-		return nil
-	}
-
-	// Compare with current spec
-	if !spec.CompatibleWith(newIcebergSpec) {
-		return []table.Update{
-			table.NewAddPartitionSpecUpdate(newIcebergSpec, false),
-			table.NewSetDefaultSpecUpdate(-1),
+	// Returning to an earlier spec: point back at its existing ID.
+	for _, existing := range tbl.Metadata().PartitionSpecs() {
+		if existing.CompatibleWith(&newIcebergSpec) {
+			return []table.Update{table.NewSetDefaultSpecUpdate(existing.ID())}
 		}
 	}
 
-	return nil
+	// A new spec: add it and make it the default.
+	return []table.Update{
+		table.NewAddPartitionSpecUpdate(&newIcebergSpec, false),
+		table.NewSetDefaultSpecUpdate(-1),
+	}
 }
 
 func (r *icebergTableResource) calculateSortOrderUpdates(ctx context.Context, plan *icebergTableResourceModel, tbl *table.Table, diags *diag.Diagnostics) []table.Update {
-	if plan.SortOrder.IsUnknown() {
-		if tbl.SortOrder().OrderID() != 0 {
-			// Create a new unsorted order and set it as default
-			unsortedOrder := table.UnsortedSortOrder
-
-			return []table.Update{
-				table.NewAddSortOrderUpdate(&unsortedOrder),
-				table.NewSetDefaultSortOrderUpdate(0),
-			}
-		}
-
-		return nil
-	}
-
 	if plan.SortOrder.IsNull() {
 		return nil
 	}
 
-	var planOrder icebergTableSortOrder
-	d := plan.SortOrder.As(ctx, &planOrder, basetypes.ObjectAsOptions{})
-	diags.Append(d...)
+	newIcebergOrder := table.UnsortedSortOrder
+	if !plan.SortOrder.IsUnknown() {
+		var planOrder icebergTableSortOrder
+		d := plan.SortOrder.As(ctx, &planOrder, basetypes.ObjectAsOptions{})
+		diags.Append(d...)
 
-	if diags.HasError() {
+		if diags.HasError() {
+			return nil
+		}
+
+		order, err := planOrder.ToIceberg()
+		if err != nil {
+			diags.AddError("failed to convert sort order", err.Error())
+
+			return nil
+		}
+		newIcebergOrder = order
+	}
+
+	if sameSortFields(tbl.SortOrder(), newIcebergOrder) {
 		return nil
 	}
 
-	newIcebergOrder, err := planOrder.ToIceberg()
-	if err != nil {
-		diags.AddError("failed to convert sort order", err.Error())
-
-		return nil
-	}
-
-	// Compare with current sort order
-	if !tbl.SortOrder().Equals(newIcebergOrder) {
-		return []table.Update{
-			table.NewAddSortOrderUpdate(&newIcebergOrder),
-			table.NewSetDefaultSortOrderUpdate(-1),
+	// Returning to an earlier sort order: point back at its existing ID.
+	for _, existing := range tbl.Metadata().SortOrders() {
+		if sameSortFields(existing, newIcebergOrder) {
+			return []table.Update{table.NewSetDefaultSortOrderUpdate(existing.OrderID())}
 		}
 	}
 
-	return nil
+	// A new sort order: add it and make it the default.
+	return []table.Update{
+		table.NewAddSortOrderUpdate(&newIcebergOrder),
+		table.NewSetDefaultSortOrderUpdate(-1),
+	}
+}
+
+// sameSortFields matches the catalog's sort order reuse rule: fields are
+// compared and the order ID is ignored.
+func sameSortFields(a, b table.SortOrder) bool {
+	if a.Len() != b.Len() {
+		return false
+	}
+	var aFields []table.SortField
+	for _, f := range a.Fields() {
+		aFields = append(aFields, f)
+	}
+	for i, f := range b.Fields() {
+		if !aFields[i].Equals(f) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (r *icebergTableResource) syncTableToModel(ctx context.Context, tbl *table.Table, model *icebergTableResourceModel, diags *diag.Diagnostics) {
