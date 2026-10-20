@@ -496,6 +496,11 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 
 		return nil
 	}
+	if err := validateNewFieldIDs(tbl.Metadata(), planIceberg); err != nil {
+		diags.AddError("invalid field id", err.Error())
+
+		return nil
+	}
 
 	// Find the highest existing schema ID to ensure the new one is unique.
 	maxSchemaID := int64(0)
