@@ -27,13 +27,15 @@ import (
 )
 
 type icebergTableSchema struct {
-	ID     types.Int64               `tfsdk:"id" json:"schema-id"`
-	Fields []icebergTableSchemaField `tfsdk:"fields" json:"fields"`
+	ID                 types.Int64               `tfsdk:"id" json:"schema-id"`
+	IdentifierFieldIDs types.List                `tfsdk:"identifier_field_ids"`
+	Fields             []icebergTableSchemaField `tfsdk:"fields" json:"fields"`
 }
 
 func (s icebergTableSchema) AttrTypes() map[string]attr.Type {
 	return map[string]attr.Type{
-		"id": types.Int64Type,
+		"id":                   types.Int64Type,
+		"identifier_field_ids": types.ListType{ElemType: types.Int64Type},
 		"fields": types.ListType{
 			ElemType: types.ObjectType{
 				AttrTypes: icebergTableSchemaField{}.AttrTypes(4),
@@ -44,13 +46,19 @@ func (s icebergTableSchema) AttrTypes() map[string]attr.Type {
 
 func (s icebergTableSchema) MarshalJSON() ([]byte, error) {
 	type Alias struct {
-		ID     *int64                    `json:"schema-id,omitempty"`
-		Fields []icebergTableSchemaField `json:"fields"`
+		ID                 *int64                    `json:"schema-id,omitempty"`
+		IdentifierFieldIDs []int64                   `json:"identifier-field-ids,omitempty"`
+		Fields             []icebergTableSchemaField `json:"fields"`
 	}
 	var id *int64
 	if !s.ID.IsNull() && !s.ID.IsUnknown() {
 		val := s.ID.ValueInt64()
 		id = &val
+	}
+
+	ids, err := int64ListElements(s.IdentifierFieldIDs)
+	if err != nil {
+		return nil, err
 	}
 
 	return json.Marshal(&struct {
@@ -59,16 +67,18 @@ func (s icebergTableSchema) MarshalJSON() ([]byte, error) {
 	}{
 		Type: "struct",
 		Alias: Alias{
-			ID:     id,
-			Fields: s.Fields,
+			ID:                 id,
+			IdentifierFieldIDs: ids,
+			Fields:             s.Fields,
 		},
 	})
 }
 
 func (s *icebergTableSchema) UnmarshalJSON(b []byte) error {
 	type Alias struct {
-		ID     int64                     `json:"schema-id"`
-		Fields []icebergTableSchemaField `json:"fields"`
+		ID                 int64                     `json:"schema-id"`
+		IdentifierFieldIDs []int64                   `json:"identifier-field-ids"`
+		Fields             []icebergTableSchemaField `json:"fields"`
 	}
 	var raw Alias
 	if err := json.Unmarshal(b, &raw); err != nil {
@@ -77,7 +87,61 @@ func (s *icebergTableSchema) UnmarshalJSON(b []byte) error {
 	s.ID = types.Int64Value(raw.ID)
 	s.Fields = raw.Fields
 
+	ids := raw.IdentifierFieldIDs
+	if len(ids) == 0 {
+		// Represent "no identifiers" as an empty list so create/read/import
+		// round-trip consistently (null means "omitted from config").
+		s.IdentifierFieldIDs = types.ListValueMust(types.Int64Type, []attr.Value{})
+	} else {
+		elems := make([]attr.Value, len(ids))
+		for i, id := range ids {
+			elems[i] = types.Int64Value(id)
+		}
+		s.IdentifierFieldIDs = types.ListValueMust(types.Int64Type, elems)
+	}
+
 	return nil
+}
+
+// int64ListElements returns the int64 elements of a Terraform list, or nil when
+// the list is null/unknown (including an unset optional attribute).
+func int64ListElements(list types.List) ([]int64, error) {
+	if list.IsNull() || list.IsUnknown() {
+		return nil, nil
+	}
+	elems := list.Elements()
+	out := make([]int64, 0, len(elems))
+	for _, elem := range elems {
+		v, ok := elem.(types.Int64)
+		if !ok {
+			return nil, fmt.Errorf("expected int64 list element, got %T", elem)
+		}
+		if v.IsNull() || v.IsUnknown() {
+			continue
+		}
+		out = append(out, v.ValueInt64())
+	}
+
+	return out, nil
+}
+
+// preserveIdentifierFieldIDs copies identifier field IDs from the current table
+// schema when the plan omits them (null/unknown). An explicit empty list clears
+// identifiers; a non-empty plan list is left unchanged.
+func (s *icebergTableSchema) preserveIdentifierFieldIDs(current *iceberg.Schema) {
+	if !s.IdentifierFieldIDs.IsNull() && !s.IdentifierFieldIDs.IsUnknown() {
+		return
+	}
+	if current == nil || len(current.IdentifierFieldIDs) == 0 {
+		s.IdentifierFieldIDs = types.ListValueMust(types.Int64Type, []attr.Value{})
+
+		return
+	}
+	elems := make([]attr.Value, len(current.IdentifierFieldIDs))
+	for i, id := range current.IdentifierFieldIDs {
+		elems[i] = types.Int64Value(int64(id))
+	}
+	s.IdentifierFieldIDs = types.ListValueMust(types.Int64Type, elems)
 }
 
 func (s *icebergTableSchema) ToIceberg() (*iceberg.Schema, error) {
