@@ -362,10 +362,6 @@ func (r *icebergTableResource) Update(ctx context.Context, req resource.UpdateRe
 		return
 	}
 
-	requirements := []table.Requirement{
-		table.AssertTableUUID(tbl.Metadata().TableUUID()),
-	}
-
 	updates := make([]table.Update, 0)
 
 	updates = append(updates, r.calculatePropertyUpdates(ctx, &plan, &state, &resp.Diagnostics)...)
@@ -378,6 +374,7 @@ func (r *icebergTableResource) Update(ctx context.Context, req resource.UpdateRe
 	}
 
 	if len(updates) > 0 {
+		requirements := commitRequirements(tbl.Metadata(), updates)
 		_, _, err = r.catalog.CommitTable(ctx, tableIdent, requirements, updates)
 		if err != nil {
 			resp.Diagnostics.AddError("failed to commit table updates", err.Error())
