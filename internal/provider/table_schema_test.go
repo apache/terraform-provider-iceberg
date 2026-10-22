@@ -15,7 +15,9 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -239,5 +241,49 @@ func TestAssignFieldIDsIntoReservedRange(t *testing.T) {
 	s.assignFieldIDs(0)
 	if err := s.validateFieldIDs(); err == nil || !strings.Contains(err.Error(), "id 2147483448") {
 		t.Fatalf("expected reserved id error, got %v", err)
+	}
+}
+
+func TestPartitionSpecSourceIDsRoundTrip(t *testing.T) {
+	tests := []struct {
+		name      string
+		specJSON  string
+		sourceIDs []int64
+	}{
+		{
+			name:      "single source",
+			specJSON:  `{"spec-id": 1, "fields": [{"source-id": 1, "field-id": 1000, "name": "id_bucket", "transform": "bucket[16]"}]}`,
+			sourceIDs: []int64{1},
+		},
+		{
+			name:      "multi source",
+			specJSON:  `{"spec-id": 1, "fields": [{"source-ids": [1, 2], "field-id": 1000, "name": "id_data_bucket", "transform": "bucket[16]"}]}`,
+			sourceIDs: []int64{1, 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var want iceberg.PartitionSpec
+			if err := json.Unmarshal([]byte(tt.specJSON), &want); err != nil {
+				t.Fatalf("unmarshal spec: %v", err)
+			}
+
+			var s icebergTablePartitionSpec
+			if err := s.FromIceberg(want); err != nil {
+				t.Fatalf("FromIceberg: %v", err)
+			}
+			if got := s.Fields[0].SourceIDs; !slices.Equal(got, tt.sourceIDs) {
+				t.Errorf("expected source ids %v, got %v", tt.sourceIDs, got)
+			}
+
+			got, err := s.ToIceberg()
+			if err != nil {
+				t.Fatalf("ToIceberg: %v", err)
+			}
+			if !got.Equals(want) {
+				t.Errorf("expected spec %v after round trip, got %v", want, *got)
+			}
+		})
 	}
 }

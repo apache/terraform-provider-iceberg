@@ -415,8 +415,12 @@ func (s *icebergTablePartitionSpec) FromIceberg(icebergSpec iceberg.PartitionSpe
 	s.SpecID = types.Int64Value(int64(icebergSpec.ID()))
 	s.Fields = make([]icebergTablePartitionField, 0, icebergSpec.NumFields())
 	for _, field := range icebergSpec.Fields() {
+		sourceIDs := make([]int64, len(field.SourceIDs))
+		for i, id := range field.SourceIDs {
+			sourceIDs[i] = int64(id)
+		}
 		s.Fields = append(s.Fields, icebergTablePartitionField{
-			SourceIDs: []int64{int64(field.SourceID())},
+			SourceIDs: sourceIDs,
 			FieldID:   types.Int64Value(int64(field.FieldID)),
 			Name:      field.Name,
 			Transform: field.Transform.String(),
