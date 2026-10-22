@@ -15,7 +15,7 @@
 
 module github.com/apache/terraform-provider-iceberg
 
-go 1.25.9
+go 1.27.3
 
 require (
 	github.com/apache/iceberg-go v0.7.0
