@@ -223,6 +223,7 @@ licenses-binary/ for text of these licenses.
 
 BSD 2-Clause
 ------------
+github.com/twpayne/go-geom
 github.com/vmihailenco/msgpack/v5
 github.com/vmihailenco/tagparser/v2
 github.com/zeebo/xxh3
@@ -230,50 +231,37 @@ github.com/zeebo/xxh3
 BSD 3-Clause
 ------------
 github.com/antlr4-go/antlr/v4
+github.com/bits-and-blooms/bitset
 github.com/golang/protobuf
 github.com/google/uuid
 github.com/klauspost/compress
 github.com/pierrec/lz4/v4
-github.com/pmezard/go-difflib
 github.com/twmb/murmur3
 golang.org/x/exp
 golang.org/x/net
 golang.org/x/oauth2
 golang.org/x/sync
 golang.org/x/sys
-golang.org/x/term
 golang.org/x/text
 google.golang.org/protobuf
 
-ISC License
------------
-github.com/davecgh/go-spew
-
 MIT License
 -----------
-atomicgo.dev/cursor
-atomicgo.dev/keyboard
-atomicgo.dev/schedule
 github.com/andybalholm/brotli
 github.com/cespare/xxhash/v2
-github.com/clipperhouse/uax29/v2
 github.com/creasty/defaults
 github.com/fatih/color
 github.com/goccy/go-json
 github.com/goccy/go-yaml
-github.com/gookit/color
 github.com/hashicorp/go-hclog
 github.com/klauspost/cpuid/v2
-github.com/lithammer/fuzzysearch
 github.com/mattn/go-colorable
 github.com/mattn/go-isatty
-github.com/mattn/go-runewidth
 github.com/mitchellh/go-testing-interface
-github.com/pterm/pterm
 github.com/stretchr/objx
 github.com/stretchr/testify
 github.com/twmb/avro
-github.com/xo/terminfo
+go.yaml.in/yaml/v3
 gopkg.in/yaml.v3
 
 Mozilla Public License 2.0
