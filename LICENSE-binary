@@ -306,6 +306,14 @@ snappy, in github.com/klauspost/compress
 s2, in github.com/klauspost/compress
   (from the Snappy-Go project, with later changes by Klaus Post)
 
+internal/difflib, in github.com/stretchr/testify
+  (from the go-difflib project)
+
+ISC License
+-----------
+internal/spew, in github.com/stretchr/testify
+  (from the go-spew project)
+
 MIT License
 -----------
 parquet/compress/brotli.go, in github.com/apache/arrow-go/v18
