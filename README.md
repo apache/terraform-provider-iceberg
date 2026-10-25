@@ -36,7 +36,7 @@ See the [provider documentation](docs/index.md) for examples and attribute refer
 
 ### Prerequisites
 
-- [Go](https://golang.org/doc/install) (1.25.1 or later)
+- [Go](https://golang.org/doc/install) (1.27.3 or later)
 - [Terraform](https://www.terraform.io/downloads.html) or [OpenTofu](https://opentofu.org/docs/intro/install/)
 
 ### Building the Provider
