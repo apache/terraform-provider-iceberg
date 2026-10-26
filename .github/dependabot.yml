@@ -36,6 +36,11 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
+    groups:
+      # All codeql-action steps in a workflow must use the same version.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
