@@ -297,19 +297,23 @@ Reviewers validate a candidate with:
 The script imports the Apache Iceberg `KEYS`, downloads the source release from
 the dev SVN, verifies its GPG signature and SHA-512 checksum, runs the Apache
 RAT license check, verifies the convenience binaries against their signed
-`SHA256SUMS`, and builds and tests the provider from source in a throwaway
-sandbox.
+`SHA256SUMS`, checks that `LICENSE-binary` and `licenses-binary/` match the
+dependencies linked into the binaries, and builds and tests the provider from
+source in a throwaway sandbox.
 
 It expects `git`, `gpg`, `curl`, and `shasum`/`sha512sum` on your `PATH`.
 
 The RAT License check needs `java` and `unzip`, but can be skipped with `VERIFY_RAT=0`.
 Binary verification needs [`gh`](https://cli.github.com/) and can be skipped with `VERIFY_BINARY=0`.
+The binary license check (`dev/update_licenses.sh --check`) downloads a pinned
+`go-licenses`, and can be skipped with `VERIFY_LICENSES=0`.
 
 The binaries are named with the final version, but `go version -m` reports the RC
 tag they were built from. That is expected, and stays true of the final release.
 
 A valid signature from a key in the `KEYS` file, a matching checksum, a clean RAT
-check, verified binaries, and a clean build and test is a `+1`.
+check, verified binaries, a clean binary license check, and a clean build and
+test is a `+1`.
 
 ## Misc
 
