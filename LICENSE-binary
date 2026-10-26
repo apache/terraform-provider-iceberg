@@ -232,12 +232,16 @@ BSD 3-Clause
 ------------
 github.com/RoaringBitmap/roaring/v2
 github.com/antlr4-go/antlr/v4
+github.com/apache/arrow-go/v18
 github.com/bits-and-blooms/bitset
 github.com/golang/protobuf
 github.com/google/uuid
 github.com/klauspost/compress
 github.com/pierrec/lz4/v4
 github.com/twmb/murmur3
+go.opentelemetry.io/otel
+go.opentelemetry.io/otel/metric
+go.opentelemetry.io/otel/trace
 golang.org/x/exp
 golang.org/x/net
 golang.org/x/oauth2

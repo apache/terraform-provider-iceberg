@@ -15,10 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 #
-# Corrections applied by dev/update_licenses.sh to what go-licenses reports.
-# Automatic classification reads one license file and returns one SPDX id, which
-# is wrong for the handful of modules that ship a compound license file or park
-# a license somewhere unexpected. Fix those here rather than by editing the
+# Licenses that go-licenses reports for a linked module but that cover none of
+# the code linked into the binary, for dev/update_licenses.sh to leave out of the
+# inventory. A compound license file is reported under every license it carries,
+# including grants for parts of the module -- other languages, commands, tests --
+# that never reach a Go binary. Drop those here rather than by editing the
 # generated section of LICENSE-binary, which is overwritten on every run.
 #
 # Tab-separated:
@@ -27,11 +28,13 @@
 #
 # <key> is the module path for a module's own license file, or the module path
 # joined with the directory the license governs for a nested one -- either way
-# it reads like an import path. SKIP drops the entry from the inventory.
+# it reads like an import path. SKIP drops every license reported for the key.
 #
-# Every entry must match a dependency that is actually linked. One that matches
-# nothing fails the run rather than being ignored, so a typo in a key surfaces
-# immediately instead of leaving a correction silently not applied.
+# Every entry must match a license that is actually reported for a linked
+# dependency. One that matches nothing fails the run rather than being ignored,
+# so a typo surfaces immediately instead of leaving a correction silently not
+# applied.
 
-github.com/RoaringBitmap/roaring/v2	BSD-3-Clause	LICENSE is Apache-2.0 with the BSD-3-Clause text appended for the parts of runcontainer.go taken from the Go standard library; go-licenses only sees the Apache-2.0 half. Apache-2.0 components are not listed, so the BSD-3-Clause grant is the one that has to be reproduced.
-github.com/klauspost/compress	BSD-3-Clause	LICENSE is BSD-3-Clause (for the Go-derived code) with the Apache-2.0 text appended; go-licenses only sees the Apache-2.0 half. The BSD-3-Clause grant is the one that has to be reproduced.
+github.com/apache/thrift	BSD-3-Clause	Granted in LICENSE for lib/py/compat/win32/stdint.h; only lib/go/thrift is linked.
+github.com/apache/thrift	GNU-All-permissive-Copying-License	Granted in LICENSE for the aclocal ax_boost_base.m4 build macros; only lib/go/thrift is linked.
+github.com/klauspost/compress	MIT	Granted in LICENSE for s2/cmd/internal/readahead, which is not linked. zstd/internal/xxhash carries its own MIT license file and is listed in the trailing section of LICENSE-binary.

@@ -35,8 +35,8 @@
 #   dev/update_licenses.sh            rewrite LICENSE-binary and licenses-binary/
 #   dev/update_licenses.sh --check    report drift, write nothing, exit non-zero
 #
-# Classifications that the tooling gets wrong are pinned in
-# dev/licenses/overrides.tsv rather than patched into the output by hand.
+# Licenses the tooling finds that do not reach the binary are dropped in
+# dev/licenses/overrides.tsv rather than patched out of the output by hand.
 
 set -euo pipefail
 
@@ -55,11 +55,13 @@ END_MARK='--- END GENERATED SECTION ---'
 # according to whatever the operator happened to have installed. v1.6.0 and
 # v2.0.1 already differ over github.com/apache/thrift.
 #
-# Bumping this to v2 or later also means changing the module path below to carry
-# a /vN suffix, and re-reviewing the inventory: v2 corrects the license file it
-# picks for some modules, which moves their classification.
-GO_LICENSES_VERSION="${GO_LICENSES_VERSION:-v1.6.0}"
-GO_LICENSES_MODULE="github.com/google/go-licenses"
+# v2 is required: v1 reports only the first license it recognizes in a file, so
+# a module whose LICENSE appends a second grant -- typically BSD-3-Clause for
+# code taken from the Go project -- was inventoried under the first one alone.
+# Moving to another major version also means changing the /vN suffix of the
+# module path below.
+GO_LICENSES_VERSION="${GO_LICENSES_VERSION:-v2.0.1}"
+GO_LICENSES_MODULE="github.com/google/go-licenses/v2"
 
 # Keep in sync with builds.goos / builds.goarch in .goreleaser.yml.
 DEFAULT_PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 freebsd/amd64 freebsd/arm64"
@@ -143,7 +145,8 @@ ensure_go_licenses() {
   GO_LICENSES="${gobin}/go-licenses"
 }
 
-# Populates ${WORK}/attributed.tsv with one row per (module, license file):
+# Populates ${WORK}/attributed.tsv with one row per (module, license file,
+# license found in it):
 #   module-path <TAB> version <TAB> license-path-within-module <TAB> spdx-id
 collect() {
   local template="${WORK}/report.tpl"
@@ -221,7 +224,8 @@ collect() {
     | sort -u >"${WORK}/attributed.tsv"
 }
 
-# Rewrites attributed.tsv in place, applying dev/licenses/overrides.tsv.
+# Rewrites attributed.tsv in place, dropping the licenses that
+# dev/licenses/overrides.tsv rules out.
 #
 # An entry that matches nothing is an error rather than a no-op: it is either a
 # typo in the key or a dependency that has since been dropped, and silently
@@ -238,7 +242,7 @@ apply_overrides() {
         malformed = 1
         next
       }
-      override[$1] = $2
+      drop[$1 "\t" $2] = 1
       next
     }
     {
@@ -250,20 +254,18 @@ apply_overrides() {
         sub(/\/[^\/]+$/, "", sub_dir)
         key = key "/" sub_dir
       }
-      if (key in override) {
-        used[key] = 1
-        if (override[key] == "SKIP") next
-        $4 = override[key]
-      }
+      if ((key "\t" $4) in drop) { used[key "\t" $4] = 1; next }
+      if ((key "\tSKIP") in drop) { used[key "\tSKIP"] = 1; next }
       print
     }
     END {
       # A malformed entry never made it into the table, so it would also report
       # as unmatched. Report the cause, not the consequence.
       if (malformed) exit 2
-      for (key in override) {
-        if (key in used) continue
-        print "error: " file ": override for \"" key "\" matches no linked dependency" > "/dev/stderr"
+      for (entry in drop) {
+        if (entry in used) continue
+        split(entry, part, "\t")
+        print "error: " file ": override for \"" part[1] "\" (" part[2] ") matches no linked dependency" > "/dev/stderr"
         unmatched = 1
       }
       if (unmatched) exit 1
@@ -274,10 +276,10 @@ apply_overrides() {
     fail "dev/licenses/overrides.tsv is malformed; each entry is
 <key><TAB><SPDX id | SKIP><TAB><reason>, and the separators must be tabs."
   elif [[ ${status} -ne 0 ]]; then
-    fail "every override must name a dependency that is actually linked; drop the
-entry if the dependency is gone, or correct the key. A module's own license file
-is keyed by the module path, a nested one by the module path joined with the
-directory it governs."
+    fail "every override must name a license go-licenses actually reports for a
+linked dependency; drop the entry if the dependency or license is gone, or
+correct it. A module's own license file is keyed by the module path, a nested
+one by the module path joined with the directory it governs."
   fi
   mv "${WORK}/attributed.override" "${WORK}/attributed.tsv"
 }
@@ -294,19 +296,13 @@ partition() {
     if ! heading="$(heading_for "${spdx}")"; then
       fail "unmapped license '${spdx}' for ${mod}.
 Add a heading for it in heading_for() (and confirm it is even acceptable for an
-ASF distribution: https://www.apache.org/legal/resolved.html), or pin a correct
-classification in dev/licenses/overrides.tsv."
+ASF distribution: https://www.apache.org/legal/resolved.html), or, if it covers
+nothing that is linked, drop it in dev/licenses/overrides.tsv."
     fi
     printf '%s\t%s\t%s\t%s\n' "${heading}" "${mod}" "${ver}" "${sub}" >>"${WORK}/modlevel.tsv"
   done <"${WORK}/attributed.tsv"
+  # A module whose license file carries several grants is listed under each.
   sort -u -o "${WORK}/modlevel.tsv" "${WORK}/modlevel.tsv"
-
-  # A module must not end up in two license groups; that means an override is
-  # missing or wrong rather than that both are true. modlevel.tsv is sorted by
-  # heading, so duplicate modules are not adjacent until sorted again.
-  local dupes
-  dupes="$(cut -f2 "${WORK}/modlevel.tsv" | sort | uniq -d)"
-  [[ -z "${dupes}" ]] || fail "modules classified under more than one license: ${dupes}"
 
   # Nested, non-Apache license files: module <TAB> governed dir <TAB> spdx <TAB> path
   : >"${WORK}/nested.tsv"
