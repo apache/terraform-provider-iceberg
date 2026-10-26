@@ -230,6 +230,7 @@ github.com/zeebo/xxh3
 
 BSD 3-Clause
 ------------
+github.com/RoaringBitmap/roaring/v2
 github.com/antlr4-go/antlr/v4
 github.com/bits-and-blooms/bitset
 github.com/golang/protobuf
