@@ -20,13 +20,15 @@
 # Verifies a release candidate of the Apache Iceberg Terraform provider so you
 # can cast an informed vote. It downloads the source release from the Apache dev
 # SVN and checks its GPG signature and checksum, runs the Apache RAT license
-# check, then builds and tests the provider from source in a throwaway sandbox.
+# check, checks that LICENSE-binary and licenses-binary/ match the dependencies
+# linked into the binaries, then builds and tests the provider from source in a
+# throwaway sandbox.
 #
 # Usage: dev/release/verify_rc.sh <version> <rc>
 #  e.g.: dev/release/verify_rc.sh 0.7.0 1
 #
 # A valid signature from a key in the KEYS file, a matching checksum, a clean RAT
-# check, and a clean build/test is a +1.
+# check, a clean binary license check, and a clean build/test is a +1.
 
 set -eu
 
@@ -59,6 +61,7 @@ BINARY_BASE_NAME="terraform-provider-iceberg_${VERSION}"
 : "${VERIFY_FORCE_USE_GO_BINARY:=0}"
 : "${VERIFY_SIGN:=${VERIFY_DEFAULT}}"
 : "${VERIFY_RAT:=${VERIFY_DEFAULT}}"
+: "${VERIFY_LICENSES:=${VERIFY_DEFAULT}}"
 : "${VERIFY_BINARY:=${VERIFY_DEFAULT}}"
 
 VERIFY_SUCCESS=no
@@ -234,6 +237,15 @@ run_rat_check() {
   fi
 }
 
+run_binary_license_check() {
+  if [ "${VERIFY_LICENSES}" -gt 0 ]; then
+    # dev/update_licenses.sh installs its pinned go-licenses under build/ and
+    # fails if LICENSE-binary or licenses-binary/ have drifted from the modules
+    # the binaries link. Its list of modules shipping a NOTICE is advisory.
+    ./dev/update_licenses.sh --check
+  fi
+}
+
 build_and_test_source_distribution() {
   go build ./...
   go test ./...
@@ -250,6 +262,7 @@ ensure_source_directory
 ensure_go
 pushd "${ARCHIVE_BASE_NAME}"
 run_rat_check
+run_binary_license_check
 build_and_test_source_distribution
 popd
 
