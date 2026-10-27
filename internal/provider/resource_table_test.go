@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/apache/iceberg-go/table"
@@ -1269,23 +1270,23 @@ func updateActions(t *testing.T, updates []table.Update) string {
 	if err := json.Unmarshal(b, &raw); err != nil {
 		t.Fatalf("unmarshal updates: %v", err)
 	}
-	out := ""
+	var out strings.Builder
 	for _, u := range raw {
-		out += u["action"].(string)
+		out.WriteString(u["action"].(string))
 		if s, ok := u["schema"].(map[string]any); ok {
 			b, _ := json.Marshal(s["schema-id"])
-			out += "(" + string(b) + ")"
+			fmt.Fprintf(&out, "(%s)", b)
 		}
 		for _, k := range []string{"schema-id", "spec-id", "sort-order-id"} {
 			if v, ok := u[k]; ok {
 				b, _ := json.Marshal(v)
-				out += "(" + string(b) + ")"
+				fmt.Fprintf(&out, "(%s)", b)
 			}
 		}
-		out += ";"
+		out.WriteString(";")
 	}
 
-	return out
+	return out.String()
 }
 
 const (
