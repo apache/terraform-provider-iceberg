@@ -187,6 +187,135 @@ func TestValidateSchemaEvolution(t *testing.T) {
 	}
 }
 
+func TestValidateFieldIDParents(t *testing.T) {
+	child := iceberg.NestedField{ID: 3, Name: "child", Type: iceberg.PrimitiveTypes.Int64, Required: false}
+
+	twoStructs := func(leftFields, rightFields []iceberg.NestedField) *iceberg.Schema {
+		return iceberg.NewSchema(0,
+			iceberg.NestedField{ID: 1, Name: "left", Type: &iceberg.StructType{FieldList: leftFields}, Required: false},
+			iceberg.NestedField{ID: 2, Name: "right", Type: &iceberg.StructType{FieldList: rightFields}, Required: false},
+		)
+	}
+
+	twoLists := func(leftElemID, rightElemID int) *iceberg.Schema {
+		return iceberg.NewSchema(0,
+			iceberg.NestedField{ID: 1, Name: "left", Type: &iceberg.ListType{
+				ElementID: leftElemID, Element: iceberg.PrimitiveTypes.Int64, ElementRequired: false,
+			}, Required: false},
+			iceberg.NestedField{ID: 2, Name: "right", Type: &iceberg.ListType{
+				ElementID: rightElemID, Element: iceberg.PrimitiveTypes.String, ElementRequired: false,
+			}, Required: false},
+		)
+	}
+
+	twoMaps := func(leftKeyID, leftValueID, rightKeyID, rightValueID int) *iceberg.Schema {
+		return iceberg.NewSchema(0,
+			iceberg.NestedField{ID: 1, Name: "left", Type: &iceberg.MapType{
+				KeyID: leftKeyID, KeyType: iceberg.PrimitiveTypes.String,
+				ValueID: leftValueID, ValueType: iceberg.PrimitiveTypes.Int64, ValueRequired: false,
+			}, Required: false},
+			iceberg.NestedField{ID: 2, Name: "right", Type: &iceberg.MapType{
+				KeyID: rightKeyID, KeyType: iceberg.PrimitiveTypes.String,
+				ValueID: rightValueID, ValueType: iceberg.PrimitiveTypes.Int32, ValueRequired: false,
+			}, Required: false},
+		)
+	}
+
+	tests := []struct {
+		name    string
+		current *iceberg.Schema
+		planned *iceberg.Schema
+		wantErr string
+	}{
+		{
+			name:    "struct child stays under same parent",
+			current: twoStructs([]iceberg.NestedField{child}, nil),
+			planned: twoStructs([]iceberg.NestedField{child}, nil),
+		},
+		{
+			name:    "struct child renamed under same parent",
+			current: twoStructs([]iceberg.NestedField{child}, nil),
+			planned: twoStructs([]iceberg.NestedField{{ID: 3, Name: "renamed", Type: iceberg.PrimitiveTypes.Int64, Required: false}}, nil),
+		},
+		{
+			name:    "struct child dropped and new id added under other parent",
+			current: twoStructs([]iceberg.NestedField{child}, nil),
+			planned: twoStructs(nil, []iceberg.NestedField{{ID: 4, Name: "child", Type: iceberg.PrimitiveTypes.Int64, Required: false}}),
+		},
+		{
+			name:    "struct child moved between parents",
+			current: twoStructs([]iceberg.NestedField{child}, nil),
+			planned: twoStructs(nil, []iceberg.NestedField{child}),
+			wantErr: `field "child" (id 3): cannot move from parent "left" (id 1) to parent "right" (id 2)`,
+		},
+		{
+			name:    "list element moved between parents",
+			current: twoLists(3, 4),
+			planned: twoLists(5, 3),
+			wantErr: `field "element" (id 3): cannot move from parent "left" (id 1) to parent "right" (id 2)`,
+		},
+		{
+			name:    "map key moved between parents",
+			current: twoMaps(3, 4, 5, 6),
+			planned: twoMaps(7, 4, 3, 6),
+			wantErr: `field "key" (id 3): cannot move from parent "left" (id 1) to parent "right" (id 2)`,
+		},
+		{
+			name:    "map value moved between parents",
+			current: twoMaps(3, 4, 5, 6),
+			planned: twoMaps(3, 7, 5, 4),
+			wantErr: `field "value" (id 4): cannot move from parent "left" (id 1) to parent "right" (id 2)`,
+		},
+		{
+			name: "root field moved into a struct",
+			current: iceberg.NewSchema(0,
+				iceberg.NestedField{ID: 1, Name: "wrapper", Type: &iceberg.StructType{}, Required: false},
+				iceberg.NestedField{ID: 3, Name: "data", Type: iceberg.PrimitiveTypes.String, Required: false},
+			),
+			planned: iceberg.NewSchema(0,
+				iceberg.NestedField{ID: 1, Name: "wrapper", Type: &iceberg.StructType{FieldList: []iceberg.NestedField{
+					{ID: 3, Name: "data", Type: iceberg.PrimitiveTypes.String, Required: false},
+				}}, Required: false},
+			),
+			wantErr: `field "data" (id 3): cannot move from parent table root to parent "wrapper" (id 1)`,
+		},
+		{
+			name: "nested field moved to table root",
+			current: iceberg.NewSchema(0,
+				iceberg.NestedField{ID: 1, Name: "wrapper", Type: &iceberg.StructType{FieldList: []iceberg.NestedField{
+					{ID: 3, Name: "data", Type: iceberg.PrimitiveTypes.String, Required: false},
+				}}, Required: false},
+			),
+			planned: iceberg.NewSchema(0,
+				iceberg.NestedField{ID: 1, Name: "wrapper", Type: &iceberg.StructType{}, Required: false},
+				iceberg.NestedField{ID: 3, Name: "data", Type: iceberg.PrimitiveTypes.String, Required: false},
+			),
+			wantErr: `field "data" (id 3): cannot move from parent "wrapper" (id 1) to parent table root`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSchemaEvolution(tt.current, tt.planned)
+
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestValidateFieldIDsReservedRange(t *testing.T) {
 	schemaWithIDs := func(ids ...int64) icebergTableSchema {
 		var s icebergTableSchema
