@@ -16,13 +16,17 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/apache/iceberg-go"
 	"github.com/apache/iceberg-go/catalog"
+	"github.com/apache/iceberg-go/catalog/rest"
 	"github.com/apache/iceberg-go/table"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -30,7 +34,6 @@ import (
 	rscschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
@@ -69,11 +72,11 @@ func (r *icebergTableResource) Schema(_ context.Context, _ resource.SchemaReques
 			"id": rscschema.StringAttribute{
 				Computed: true,
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					tableIDPlanModifier{},
 				},
 			},
 			"namespace": rscschema.ListAttribute{
-				Description: "The namespace of the table.",
+				Description: "The namespace of the table. Changing it replaces the table.",
 				Required:    true,
 				ElementType: types.StringType,
 				PlanModifiers: []planmodifier.List{
@@ -81,11 +84,8 @@ func (r *icebergTableResource) Schema(_ context.Context, _ resource.SchemaReques
 				},
 			},
 			"name": rscschema.StringAttribute{
-				Description: "The name of the table.",
+				Description: "The name of the table. Changing it renames the table in place.",
 				Required:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"schema": rscschema.SingleNestedAttribute{
 				Description: "The schema of the table.",
@@ -302,19 +302,24 @@ func (r *icebergTableResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	tableName := data.Name.ValueString()
-	tableIdent := append(namespaceName, tableName)
-
-	tbl, err := r.catalog.LoadTable(ctx, tableIdent)
+	pending := getPendingRename(ctx, req.Private, &resp.Diagnostics)
+	tableIdent, tbl, err := r.loadStateTable(ctx, namespaceName, data.Name.ValueString(), pending)
 	if err != nil {
-		if errors.Is(err, catalog.ErrNoSuchTable) {
-			resp.State.RemoveResource(ctx)
-
-			return
-		}
 		resp.Diagnostics.AddError("failed to load table", err.Error())
 
 		return
+	}
+	if tbl == nil {
+		resp.State.RemoveResource(ctx)
+
+		return
+	}
+	// Finding the table under its old name does not rule out that the rename
+	// still completes, so the record is kept until the new name is confirmed.
+	if pending != nil && catalog.TableNameFromIdent(tableIdent) != data.Name.ValueString() {
+		data.Name = types.StringValue(catalog.TableNameFromIdent(tableIdent))
+		data.ID = types.StringValue(strings.Join(tableIdent, "."))
+		resp.Diagnostics.Append(resp.Private.SetKey(ctx, pendingRenameKey, nil)...)
 	}
 
 	r.syncTableToModel(ctx, tbl, &data, &resp.Diagnostics)
@@ -352,16 +357,43 @@ func (r *icebergTableResource) Update(ctx context.Context, req resource.UpdateRe
 		return
 	}
 
-	tableName := state.Name.ValueString()
-	tableIdent := append(namespaceName, tableName)
-
-	tbl, err := r.catalog.LoadTable(ctx, tableIdent)
+	pending := getPendingRename(ctx, req.Private, &resp.Diagnostics)
+	tableIdent, tbl, err := r.loadStateTable(ctx, namespaceName, state.Name.ValueString(), pending)
+	if err == nil && tbl == nil {
+		err = catalog.ErrNoSuchTable
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("failed to load table", err.Error())
 
 		return
 	}
 
+	// Names that an earlier rename with an unknown outcome may still move the table to.
+	var pendingNames []string
+	if pending != nil && catalog.TableNameFromIdent(tableIdent) != state.Name.ValueString() {
+		// Record where the pending rename left the table before renaming it again.
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), types.StringValue(catalog.TableNameFromIdent(tableIdent)))...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), types.StringValue(strings.Join(tableIdent, ".")))...)
+		resp.Diagnostics.Append(resp.Private.SetKey(ctx, pendingRenameKey, nil)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	} else if pending != nil {
+		// A late rename request would act on whichever table holds the old name,
+		// so the old name is not released for another rename.
+		if name := plan.Name.ValueString(); name != state.Name.ValueString() && !slices.Contains(pending.Names, name) {
+			resp.Diagnostics.AddError("failed to rename table", fmt.Sprintf(
+				"renaming table %q to %s has an unknown outcome; rename it to that name again, "+
+					"or run terraform state rm and import the table under its current name to discard the pending rename",
+				state.Name.ValueString(), strings.Join(pending.Names, " or ")))
+
+			return
+		}
+		pendingNames = pending.Names
+	}
+
+	// Work out the other changes first, so an invalid one stops the update
+	// before the table is renamed.
 	updates := make([]table.Update, 0)
 
 	updates = append(updates, r.calculatePropertyUpdates(ctx, &plan, &state, &resp.Diagnostics)...)
@@ -371,6 +403,30 @@ func (r *icebergTableResource) Update(ctx context.Context, req resource.UpdateRe
 
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	// A namespace change replaces the table, so only the name can change here.
+	if catalog.TableNameFromIdent(tableIdent) != plan.Name.ValueString() {
+		newIdent := append(slices.Clone(namespaceName), plan.Name.ValueString())
+		renamed, record, err := r.renameTable(ctx, tbl, tableIdent, newIdent, pendingNames)
+		if record != nil {
+			raw, _ := json.Marshal(record)
+			resp.Diagnostics.Append(resp.Private.SetKey(ctx, pendingRenameKey, raw)...)
+		}
+		if err != nil {
+			resp.Diagnostics.AddError("failed to rename table", err.Error())
+
+			return
+		}
+		tbl, tableIdent = renamed, newIdent
+
+		// Save the new name in case the commit below fails.
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), plan.Name)...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), types.StringValue(strings.Join(tableIdent, ".")))...)
+		resp.Diagnostics.Append(resp.Private.SetKey(ctx, pendingRenameKey, nil)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
 	}
 
 	if len(updates) > 0 {
@@ -391,6 +447,9 @@ func (r *icebergTableResource) Update(ctx context.Context, req resource.UpdateRe
 		}
 	}
 
+	if catalog.TableNameFromIdent(tableIdent) != state.Name.ValueString() {
+		plan.ID = types.StringValue(strings.Join(tableIdent, "."))
+	}
 	r.syncTableToModel(ctx, tbl, &plan, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
@@ -398,6 +457,173 @@ func (r *icebergTableResource) Update(ctx context.Context, req resource.UpdateRe
 
 	diags = resp.State.Set(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
+}
+
+// tableIDPlanModifier keeps the ID from state unless the table is renamed.
+type tableIDPlanModifier struct{}
+
+func (m tableIDPlanModifier) Description(_ context.Context) string {
+	return "Keeps the ID from state unless the table is renamed."
+}
+
+func (m tableIDPlanModifier) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (m tableIDPlanModifier) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if req.StateValue.IsNull() || !req.PlanValue.IsUnknown() {
+		return
+	}
+
+	var planNamespace, stateNamespace types.List
+	var planName, stateName types.String
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("namespace"), &planNamespace)...)
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("name"), &planName)...)
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("namespace"), &stateNamespace)...)
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("name"), &stateName)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// A namespace change, even an unknown one, replaces the table.
+	if !planNamespace.Equal(stateNamespace) || planName.IsUnknown() {
+		return
+	}
+	if planName.Equal(stateName) {
+		resp.PlanValue = req.StateValue
+
+		return
+	}
+
+	var ident []string
+	resp.Diagnostics.Append(stateNamespace.ElementsAs(ctx, &ident, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.PlanValue = types.StringValue(strings.Join(append(ident, planName.ValueString()), "."))
+}
+
+// pendingRenameKey records a rename with an unknown outcome.
+const pendingRenameKey = "pending_rename"
+
+type pendingRename struct {
+	Names     []string `json:"names"`
+	TableUUID string   `json:"table_uuid,omitempty"`
+}
+
+func getPendingRename(ctx context.Context, private interface {
+	GetKey(context.Context, string) ([]byte, diag.Diagnostics)
+}, diags *diag.Diagnostics,
+) *pendingRename {
+	raw, d := private.GetKey(ctx, pendingRenameKey)
+	diags.Append(d...)
+	var pending pendingRename
+	if len(raw) == 0 || json.Unmarshal(raw, &pending) != nil {
+		return nil
+	}
+
+	return &pending
+}
+
+// loadStateTable loads the table the state refers to, or returns a nil table if
+// it no longer exists. While a rename is pending, the table may be under either
+// name, and only a table with the recorded UUID is accepted.
+func (r *icebergTableResource) loadStateTable(ctx context.Context, namespace []string, name string, pending *pendingRename) (table.Identifier, *table.Table, error) {
+	names := []string{name}
+	if pending != nil {
+		names = append(names, pending.Names...)
+	}
+	var loadErr error
+	for _, n := range names {
+		ident := append(slices.Clone(namespace), n)
+		tbl, err := r.catalog.LoadTable(ctx, ident)
+		if errors.Is(err, catalog.ErrNoSuchTable) {
+			continue
+		}
+		if err != nil {
+			// The other name may still hold the table.
+			loadErr = cmp.Or(loadErr, err)
+
+			continue
+		}
+		if pending == nil || hasTableUUID(tbl, pending.TableUUID) {
+			return ident, tbl, nil
+		}
+	}
+
+	return nil, nil, loadErr
+}
+
+// isClientError reports whether err is a 4xx response from the REST catalog.
+func isClientError(err error) bool {
+	return errors.Is(err, rest.ErrRESTError) && !errors.Is(err, rest.ErrServerError) && !errors.Is(err, rest.ErrServiceUnavailable)
+}
+
+// hasTableUUID reports whether tbl has the given UUID. Tables without a UUID,
+// such as some format-version 1 tables, never match.
+func hasTableUUID(tbl *table.Table, tableUUID string) bool {
+	id := tbl.Metadata().TableUUID()
+
+	return [16]byte(id) != [16]byte{} && id.String() == tableUUID
+}
+
+// renameTable renames the table. If the outcome is unknown, it also returns the
+// pending rename to record, which keeps the names in pendingNames.
+func (r *icebergTableResource) renameTable(ctx context.Context, tbl *table.Table, from, to table.Identifier, pendingNames []string) (*table.Table, *pendingRename, error) {
+	// Without a UUID the table could not be told apart from another table if
+	// the outcome of the rename were unknown.
+	tableUUID := tbl.Metadata().TableUUID().String()
+	if !hasTableUUID(tbl, tableUUID) {
+		return nil, nil, errors.New("the table has no UUID, so it cannot be renamed in place; " +
+			"rename it in the catalog, run terraform state rm on this resource, then terraform import it under its new name and run terraform plan")
+	}
+
+	// Errors raised before the request is sent leave the table where it is.
+	if err := catalog.ValidateTableIdentifier(to); err != nil {
+		return nil, nil, err
+	}
+	if _, err := r.catalog.LoadTable(ctx, to); err == nil {
+		return nil, nil, fmt.Errorf("%w: %s", catalog.ErrTableAlreadyExists, strings.Join(to, "."))
+	}
+	if views, ok := r.catalog.(interface {
+		CheckViewExists(context.Context, table.Identifier) (bool, error)
+	}); ok {
+		if exists, err := views.CheckViewExists(ctx, to); err == nil && exists {
+			return nil, nil, fmt.Errorf("%w: %s", catalog.ErrViewAlreadyExists, strings.Join(to, "."))
+		}
+	}
+
+	record := &pendingRename{Names: slices.Clone(pendingNames), TableUUID: tableUUID}
+	if toName := catalog.TableNameFromIdent(to); !slices.Contains(record.Names, toName) {
+		record.Names = append(record.Names, toName)
+	}
+
+	renamed, err := r.catalog.RenameTable(ctx, from, to)
+	if err == nil {
+		// RenameTable loads the table under the new name in a separate request;
+		// make sure it is still the table that was renamed.
+		if !hasTableUUID(renamed, tableUUID) {
+			return nil, record, fmt.Errorf("the table now named %s is not the renamed table", strings.Join(to, "."))
+		}
+
+		return renamed, nil, nil
+	}
+	if errors.Is(err, rest.ErrEndpointNotSupported) || errors.Is(err, catalog.ErrTableAlreadyExists) || errors.Is(err, catalog.ErrViewAlreadyExists) {
+		return nil, nil, err
+	}
+
+	// RenameTable reloads the table afterwards, so the rename may have succeeded.
+	loaded, loadErr := r.catalog.LoadTable(ctx, to)
+	if loadErr == nil && hasTableUUID(loaded, tableUUID) {
+		return loaded, nil, nil
+	}
+	// A client error with nothing under the new name came from the rename
+	// request itself, which the catalog rejected and will not carry out later.
+	if isClientError(err) && errors.Is(loadErr, catalog.ErrNoSuchTable) {
+		return nil, nil, err
+	}
+
+	return nil, record, fmt.Errorf("%w. The rename may have happened anyway; the next refresh looks for the table under both names", err)
 }
 
 func (r *icebergTableResource) calculatePropertyUpdates(ctx context.Context, plan, state *icebergTableResourceModel, diags *diag.Diagnostics) []table.Update {
@@ -667,16 +893,42 @@ func (r *icebergTableResource) Delete(ctx context.Context, req resource.DeleteRe
 	tableName := data.Name.ValueString()
 	tableIdent := append(namespaceName, tableName)
 
-	err := r.catalog.DropTable(ctx, tableIdent)
-	if err != nil {
-		if errors.Is(err, catalog.ErrNoSuchTable) {
-			// If the table is already gone, we don't need to do anything.
-			return
+	pending := getPendingRename(ctx, req.Private, &resp.Diagnostics)
+	if pending == nil {
+		err := r.catalog.DropTable(ctx, tableIdent)
+		if err != nil && !errors.Is(err, catalog.ErrNoSuchTable) {
+			resp.Diagnostics.AddError("failed to drop table", err.Error())
 		}
-		resp.Diagnostics.AddError("failed to drop table", err.Error())
 
 		return
 	}
+
+	// Without a refresh, the state may still have the name from before a
+	// pending rename; drop only the table with the recorded UUID.
+	if err := r.dropPendingTable(ctx, namespaceName, tableName, pending); err != nil {
+		resp.Diagnostics.AddError("failed to drop table", err.Error())
+	}
+}
+
+// dropPendingTable drops the table of a pending rename once it is under a new
+// name. While it is still under its old name the rename could move it at any
+// moment, and dropping by that name could hit a table that takes its place.
+func (r *icebergTableResource) dropPendingTable(ctx context.Context, namespace []string, name string, pending *pendingRename) error {
+	ident, tbl, err := r.loadStateTable(ctx, namespace, name, pending)
+	if err != nil || tbl == nil {
+		return err
+	}
+	if catalog.TableNameFromIdent(ident) == name {
+		return fmt.Errorf("renaming table %q to %s has an unknown outcome, so it is not dropped by its old name; "+
+			"rename it to that name again, or run terraform state rm and drop it in the catalog",
+			name, strings.Join(pending.Names, " or "))
+	}
+	err = r.catalog.DropTable(ctx, ident)
+	if errors.Is(err, catalog.ErrNoSuchTable) {
+		return nil
+	}
+
+	return err
 }
 
 func (r *icebergTableResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

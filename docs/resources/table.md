@@ -106,12 +106,29 @@ schema = {
 }
 ```
 
+## Renaming tables
+
+Changing `name` renames the table in place, so it keeps its data and history.
+Changing `namespace` replaces the table: it is dropped and re-created empty.
+
+If a rename times out, the next plan finds the table under its old or new name.
+Until then only that rename can be retried, and the table is not destroyed.
+Tables without a UUID, which format-version 1 allows, cannot be renamed in
+place: rename the table in the catalog, run `terraform state rm` on the
+resource, `terraform import` it under the new name, and run `terraform plan`.
+
+The Iceberg REST protocol identifies tables by name and cannot cancel a request.
+A catalog may still carry out a rename that timed out, even after a retry has
+succeeded, acting on whichever table has the old name at that point. After a
+timeout, check with the catalog that the request has finished before another
+table takes the old name.
+
 ## Schema
 
 ### Required
 
-- `name` (String) The name of the table.
-- `namespace` (List of String) The namespace of the table.
+- `name` (String) The name of the table. Changing it renames the table in place.
+- `namespace` (List of String) The namespace of the table. Changing it replaces the table.
 - `schema` (Attributes) The schema of the table. (see [below for nested schema](#nestedatt--schema))
 
 ### Optional
