@@ -152,7 +152,7 @@ func (p *icebergProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 				Optional:    true,
 				Attributes: map[string]schema.Attribute{
 					"sigv4": schema.SingleNestedAttribute{
-						Description: "Sign requests with AWS Signature Version 4, as catalogs such as AWS Glue require. Setting this attribute enables signing.",
+						Description: "Sign requests with AWS Signature Version 4, as catalogs such as AWS Glue and Amazon S3 Tables require. Setting this attribute enables signing.",
 						Optional:    true,
 						Attributes: map[string]schema.Attribute{
 							"region": schema.StringAttribute{
@@ -160,7 +160,7 @@ func (p *icebergProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 								Optional:    true,
 							},
 							"signing_name": schema.StringAttribute{
-								Description: "Signing service name (the credential-scope service). Defaults to `execute-api`. Use `glue` for AWS Glue.",
+								Description: "Signing service name (the credential-scope service). Defaults to `execute-api`. Use `glue` for AWS Glue and `s3tables` for Amazon S3 Tables.",
 								Optional:    true,
 							},
 							"access_key_id": schema.StringAttribute{
