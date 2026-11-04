@@ -78,6 +78,7 @@ type oauth2Config struct {
 type sigv4Config struct {
 	region          string
 	signingName     string
+	profile         string
 	accessKeyID     string
 	secretAccessKey string
 	sessionToken    string
@@ -101,6 +102,7 @@ type icebergAuthModel struct {
 type icebergSigV4Model struct {
 	Region          types.String `tfsdk:"region"`
 	SigningName     types.String `tfsdk:"signing_name"`
+	Profile         types.String `tfsdk:"profile"`
 	AccessKeyID     types.String `tfsdk:"access_key_id"`
 	SecretAccessKey types.String `tfsdk:"secret_access_key"`
 	SessionToken    types.String `tfsdk:"session_token"`
@@ -162,6 +164,14 @@ func (p *icebergProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 							"signing_name": schema.StringAttribute{
 								Description: "Signing service name (the credential-scope service). Defaults to `execute-api`. Use `glue` for AWS Glue.",
 								Optional:    true,
+							},
+							"profile": schema.StringAttribute{
+								Description: "Named profile from the shared AWS config and credentials files. When omitted, the standard AWS credential chain selects the profile (`AWS_PROFILE`, then `default`). Cannot be set together with `access_key_id`.",
+								Optional:    true,
+								Validators: []validator.String{
+									stringvalidator.LengthAtLeast(1),
+									stringvalidator.ConflictsWith(path.MatchRelative().AtParent().AtName("access_key_id")),
+								},
 							},
 							"access_key_id": schema.StringAttribute{
 								Description: "Access key ID. When omitted, the standard AWS credential chain (environment, shared config, instance role) is used.",
@@ -329,6 +339,7 @@ func (p *icebergProvider) Configure(ctx context.Context, req provider.ConfigureR
 				p.sigv4 = &sigv4Config{
 					region:          m.Region.ValueString(),
 					signingName:     m.SigningName.ValueString(),
+					profile:         m.Profile.ValueString(),
 					accessKeyID:     m.AccessKeyID.ValueString(),
 					secretAccessKey: m.SecretAccessKey.ValueString(),
 					sessionToken:    m.SessionToken.ValueString(),
@@ -494,6 +505,9 @@ func (s *sigv4Config) awsConfig(ctx context.Context) (aws.Config, error) {
 		}
 		// Only the region comes from the AWS environment, not its credential chain.
 		load = append(load, config.WithCredentialsProvider(creds))
+	}
+	if s.profile != "" {
+		load = append(load, config.WithSharedConfigProfile(s.profile))
 	}
 	if s.region != "" {
 		load = append(load, config.WithRegion(s.region))
