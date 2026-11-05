@@ -89,10 +89,10 @@ data "iceberg_table" "example" {
 ### Read-Only
 
 - `id` (String) Dot-separated full table identifier (namespace segments and table name).
-- `partition_spec` (Attributes) The partition spec of the table. Empty when the table is not partitioned. Nested field shapes match the [`iceberg_table` resource](../resources/table.md#nestedatt--partition_spec).
+- `partition_spec` (Attributes) The partition spec of the table. Empty when the table is not partitioned. Nested field shapes match the [`iceberg_table` resource](../resources/table.md#nestedatt--partition_spec), `source_names` holds the column names of `source_ids` in the current schema, or null if a source column is no longer in it.
 - `schema` (Attributes) The current schema of the table. Nested field shapes match the [`iceberg_table` resource](../resources/table.md#nestedatt--schema); all nested attributes are computed on read.
 - `server_properties` (Map of String) Properties from table metadata as returned by the catalog (the same values surfaced as `server_properties` on the table resource after apply).
-- `sort_order` (Attributes) The sort order of the table. Empty when the table is unsorted. Nested field shapes match the [`iceberg_table` resource](../resources/table.md#nestedatt--sort_order).
+- `sort_order` (Attributes) The sort order of the table. Empty when the table is unsorted. Nested field shapes match the [`iceberg_table` resource](../resources/table.md#nestedatt--sort_order), `source_name` holds the column name of `source_id` in the current schema, or null if the source column is no longer in it.
 
 ## Error handling
 
