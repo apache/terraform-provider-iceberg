@@ -106,6 +106,54 @@ schema = {
 }
 ```
 
+## Referencing source columns by name
+
+Partition and sort fields identify their source columns by field id
+(`source_ids` / `source_id`) or by column name (`source_names` /
+`source_name`). Set exactly one of each pair, the provider fills in the other.
+Because the other attribute is computed, any change to the table shows it as
+`(known after apply)` in the plan: `source_names` / `source_name` when you use
+ids, and `source_ids` / `source_id` when you use names. The value itself does
+not change unless the referenced column does.
+
+Names are resolved against the planned schema at apply time, so a partition or
+sort field can name a column added in the same apply until then the plan shows
+the ids as `(known after apply)`. Names are case-sensitive, and nested struct
+fields use their full dotted name (for example `location.lat`).
+
+```terraform
+partition_spec = {
+  fields = [
+    {
+      source_names = ["event_time"]
+      name         = "event_time_day"
+      transform    = "day"
+    }
+  ]
+}
+
+sort_order = {
+  fields = [
+    {
+      source_name = "location.lat"
+      transform   = "identity"
+      direction   = "desc"
+      null_order  = "nulls-last"
+    }
+  ]
+}
+```
+
+A name refers to whichever column has that name when you apply. To rename a
+column without changing the partition spec or sort order, keep the column's
+`id` and update the name in both places in the same apply.
+
+If columns may be renamed outside Terraform, give the columns that partition
+and sort fields reference an explicit `id`. Without one, columns are matched by
+name: after an out-of-band rename, the next apply drops the renamed column,
+adds an empty column with the configured name, and points the partition spec
+and sort order at it.
+
 ## Schema
 
 ### Required
@@ -424,12 +472,13 @@ Required:
 Required:
 
 - `name` (String) The partition field name.
-- `source_ids` (List of Number) The source field IDs.
 - `transform` (String) The partition transform.
 
 Optional:
 
 - `field_id` (Number) The partition field ID.
+- `source_ids` (List of Number) The source field IDs. Set exactly one of source_ids or source_names the other is computed.
+- `source_names` (List of String) The source column names, resolved to source_ids at apply time. Nested struct fields use their full dotted name (e.g. 'location.lat'). Set exactly one of source_ids or source_names the other is computed.
 
 
 
@@ -447,8 +496,12 @@ Required:
 
 - `direction` (String) The sort direction (asc or desc).
 - `null_order` (String) The null order (nulls-first or nulls-last).
-- `source_id` (Number) The source field ID.
 - `transform` (String) The sort transform.
+
+Optional:
+
+- `source_id` (Number) The source field ID. Set exactly one of source_id or source_name the other is computed.
+- `source_name` (String) The source column name, resolved to source_id at apply time. Nested struct fields use their full dotted name (e.g. 'location.lat'). Set exactly one of source_id or source_name the other is computed.
 
 ## Import
 
@@ -456,3 +509,9 @@ Import is supported using the following syntax:
 
 ```shell
 $ terraform import iceberg_table a.b.table_name
+```
+
+Configuration generated with `terraform plan -generate-config-out` sets both
+`source_ids` and `source_names` on each partition field, and both `source_id`
+and `source_name` on each sort field. Keep one attribute of each pair and
+remove the other.

@@ -57,7 +57,7 @@ func convertIcebergTableMetadataToModel(ctx context.Context, tbl *table.Table, o
 	icebergSpec := tbl.Spec()
 	if icebergSpec.NumFields() > 0 {
 		var updatedSpec icebergTablePartitionSpec
-		if err := updatedSpec.FromIceberg(icebergSpec); err != nil {
+		if err := updatedSpec.FromIceberg(icebergSpec, icebergSchema); err != nil {
 			diags.AddError("failed to convert iceberg partition spec to terraform partition spec", err.Error())
 
 			return
@@ -72,7 +72,7 @@ func convertIcebergTableMetadataToModel(ctx context.Context, tbl *table.Table, o
 	icebergOrder := tbl.SortOrder()
 	if icebergOrder.Len() > 0 {
 		var updatedOrder icebergTableSortOrder
-		if err := updatedOrder.FromIceberg(icebergOrder); err != nil {
+		if err := updatedOrder.FromIceberg(icebergOrder, icebergSchema); err != nil {
 			diags.AddError("failed to convert iceberg sort order to terraform sort order", err.Error())
 
 			return
