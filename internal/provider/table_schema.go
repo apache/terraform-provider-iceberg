@@ -18,6 +18,7 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/apache/iceberg-go"
@@ -310,6 +311,10 @@ func validateSchemaEvolution(current, planned *iceberg.Schema) error {
 		return err
 	}
 
+	if err := validateFieldIDParents(current, planned, currentByID, plannedByID); err != nil {
+		return err
+	}
+
 	for id, cur := range currentByID {
 		if plan, ok := plannedByID[id]; ok {
 			if err := validateFieldEvolution(cur, plan); err != nil {
@@ -319,6 +324,73 @@ func validateSchemaEvolution(current, planned *iceberg.Schema) error {
 	}
 
 	return nil
+}
+
+// validateFieldIDParents rejects a field ID that exists in both schemas under
+// different parents. Iceberg field IDs are identities: moving id 3 from struct
+// "left" to struct "right" (or between list/map containers) silently changes
+// what that ID means. iceberg.IndexParents omits table-root fields, so those
+// are stored as table.TableRootID to catch root↔nested moves too.
+func validateFieldIDParents(current, planned *iceberg.Schema, currentByID, plannedByID map[int]iceberg.NestedField) error {
+	currentParents, err := fieldParentIDs(current, currentByID)
+	if err != nil {
+		return err
+	}
+	plannedParents, err := fieldParentIDs(planned, plannedByID)
+	if err != nil {
+		return err
+	}
+
+	ids := make([]int, 0, len(currentParents))
+	for id := range currentParents {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+
+	for _, id := range ids {
+		plannedParent, ok := plannedParents[id]
+		if !ok {
+			continue
+		}
+		currentParent := currentParents[id]
+		if currentParent == plannedParent {
+			continue
+		}
+
+		return fmt.Errorf("field %q (id %d): cannot move from parent %s to parent %s; field ids cannot change parent",
+			currentByID[id].Name, id,
+			parentFieldLabel(currentParent, currentByID),
+			parentFieldLabel(plannedParent, plannedByID))
+	}
+
+	return nil
+}
+
+func fieldParentIDs(schema *iceberg.Schema, byID map[int]iceberg.NestedField) (map[int]int, error) {
+	parents, err := iceberg.IndexParents(schema)
+	if err != nil {
+		return nil, err
+	}
+	for id := range byID {
+		if _, ok := parents[id]; !ok {
+			parents[id] = table.TableRootID
+		}
+	}
+
+	return parents, nil
+}
+
+// parentFieldLabel leads with the parent id so rename+reparent cases stay
+// readable when both parents share a name (e.g. id 1 ("a") vs id 2 ("a")).
+func parentFieldLabel(parentID int, byID map[int]iceberg.NestedField) string {
+	if parentID == table.TableRootID {
+		return "table root"
+	}
+	if f, ok := byID[parentID]; ok {
+		return fmt.Sprintf("id %d (%q)", parentID, f.Name)
+	}
+
+	return fmt.Sprintf("id %d", parentID)
 }
 
 func validateFieldEvolution(cur, plan iceberg.NestedField) error {
