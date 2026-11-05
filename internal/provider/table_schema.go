@@ -380,12 +380,14 @@ func fieldParentIDs(schema *iceberg.Schema, byID map[int]iceberg.NestedField) (m
 	return parents, nil
 }
 
+// parentFieldLabel leads with the parent id so rename+reparent cases stay
+// readable when both parents share a name (e.g. id 1 ("a") vs id 2 ("a")).
 func parentFieldLabel(parentID int, byID map[int]iceberg.NestedField) string {
 	if parentID == table.TableRootID {
 		return "table root"
 	}
 	if f, ok := byID[parentID]; ok {
-		return fmt.Sprintf("%q (id %d)", f.Name, parentID)
+		return fmt.Sprintf("id %d (%q)", parentID, f.Name)
 	}
 
 	return fmt.Sprintf("id %d", parentID)

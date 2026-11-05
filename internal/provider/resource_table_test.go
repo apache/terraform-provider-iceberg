@@ -522,7 +522,7 @@ func TestAccIcebergTableReparentFieldIDs(t *testing.T) {
 			},
 			{
 				Config:      testAccIcebergTableReparentConfig(providerCfg, tableName, "right"),
-				ExpectError: regexp.MustCompile(`(?s)invalid schema evolution.*cannot move from parent "left".*to parent "right"`),
+				ExpectError: regexp.MustCompile(`(?s)invalid schema evolution.*cannot move from parent id 1 \("left"\).*to parent id 2 \("right"\)`),
 			},
 			{
 				// The rejected reparent did not reach the catalog.
