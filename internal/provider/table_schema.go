@@ -17,7 +17,9 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/apache/iceberg-go"
@@ -398,8 +400,15 @@ func (s *icebergTablePartitionSpec) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (s *icebergTablePartitionSpec) ToIceberg() (*iceberg.PartitionSpec, error) {
-	b, err := json.Marshal(s)
+// ToIceberg converts the spec, first resolving source_names to field ids
+// against schema (the planned table schema). The receiver is not modified.
+func (s *icebergTablePartitionSpec) ToIceberg(schema *iceberg.Schema) (*iceberg.PartitionSpec, error) {
+	resolved := *s
+	resolved.Fields = slices.Clone(s.Fields)
+	if err := resolved.resolveSourceIDs(schema); err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(resolved)
 	if err != nil {
 		return nil, err
 	}
@@ -411,30 +420,85 @@ func (s *icebergTablePartitionSpec) ToIceberg() (*iceberg.PartitionSpec, error) 
 	return &icebergSpec, nil
 }
 
-func (s *icebergTablePartitionSpec) FromIceberg(icebergSpec iceberg.PartitionSpec) error {
+// FromIceberg converts icebergSpec, naming each field's source columns from
+// schema (the table's current schema).
+func (s *icebergTablePartitionSpec) FromIceberg(icebergSpec iceberg.PartitionSpec, schema *iceberg.Schema) error {
 	s.SpecID = types.Int64Value(int64(icebergSpec.ID()))
 	s.Fields = make([]icebergTablePartitionField, 0, icebergSpec.NumFields())
 	for _, field := range icebergSpec.Fields() {
-		sourceIDs := make([]int64, len(field.SourceIDs))
-		for i, id := range field.SourceIDs {
-			sourceIDs[i] = int64(id)
-		}
 		s.Fields = append(s.Fields, icebergTablePartitionField{
-			SourceIDs: sourceIDs,
-			FieldID:   types.Int64Value(int64(field.FieldID)),
-			Name:      field.Name,
-			Transform: field.Transform.String(),
+			SourceIDs:   sourceIDsList(field.SourceIDs),
+			SourceNames: sourceNamesList(schema, field.SourceIDs),
+			FieldID:     types.Int64Value(int64(field.FieldID)),
+			Name:        field.Name,
+			Transform:   field.Transform.String(),
 		})
 	}
 
 	return nil
 }
 
+// resolveSourceIDs fills source_ids from source_names for fields that name
+// their source columns instead of giving ids, and fails for a field with
+// neither. Known source_ids are kept: config never sets both (ExactlyOneOf),
+// and an update plan marks the unset one unknown, so known source_ids here
+// always come from config.
+func (s *icebergTablePartitionSpec) resolveSourceIDs(schema *iceberg.Schema) error {
+	for i := range s.Fields {
+		f := &s.Fields[i]
+		if isKnown(f.SourceIDs) {
+			continue
+		}
+		if !isKnown(f.SourceNames) {
+			return fmt.Errorf("partition field %q has neither source_ids nor source_names", f.Name)
+		}
+		names := f.SourceNames.Elements()
+		ids := make([]attr.Value, len(names))
+		for j, elem := range names {
+			name, ok := elem.(types.String)
+			if !ok || !isKnown(name) {
+				return fmt.Errorf("partition field %q: source_names must not contain null or unknown values", f.Name)
+			}
+			id, err := resolveSourceColumn(schema, name.ValueString())
+			if err != nil {
+				return fmt.Errorf("partition field %q: %w", f.Name, err)
+			}
+			ids[j] = types.Int64Value(int64(id))
+		}
+		f.SourceIDs = types.ListValueMust(types.Int64Type, ids)
+	}
+
+	return nil
+}
+
+// icebergTablePartitionField mirrors an Iceberg partition field. SourceNames
+// exists only in Terraform: it is resolved to SourceIDs before conversion and
+// never sent to the catalog.
 type icebergTablePartitionField struct {
-	SourceIDs []int64     `tfsdk:"source_ids" json:"source-ids"`
-	FieldID   types.Int64 `tfsdk:"field_id" json:"field-id,omitempty"`
-	Name      string      `tfsdk:"name" json:"name"`
-	Transform string      `tfsdk:"transform" json:"transform"`
+	SourceIDs   types.List  `tfsdk:"source_ids" json:"source-ids"`
+	SourceNames types.List  `tfsdk:"source_names" json:"-"`
+	FieldID     types.Int64 `tfsdk:"field_id" json:"field-id,omitempty"`
+	Name        string      `tfsdk:"name" json:"name"`
+	Transform   string      `tfsdk:"transform" json:"transform"`
+}
+
+// sourceIDValues returns the field's source ids, failing if they are still
+// unresolved.
+func (f icebergTablePartitionField) sourceIDValues() ([]int64, error) {
+	if !isKnown(f.SourceIDs) {
+		return nil, fmt.Errorf("partition field %q has no resolved source_ids", f.Name)
+	}
+	elems := f.SourceIDs.Elements()
+	ids := make([]int64, len(elems))
+	for i, elem := range elems {
+		id, ok := elem.(types.Int64)
+		if !ok || !isKnown(id) {
+			return nil, fmt.Errorf("partition field %q: source_ids must not contain null or unknown values", f.Name)
+		}
+		ids[i] = id.ValueInt64()
+	}
+
+	return ids, nil
 }
 
 func (f icebergTablePartitionField) MarshalJSON() ([]byte, error) {
@@ -444,13 +508,17 @@ func (f icebergTablePartitionField) MarshalJSON() ([]byte, error) {
 		Name      string  `json:"name"`
 		Transform string  `json:"transform"`
 	}
+	sourceIDs, err := f.sourceIDValues()
+	if err != nil {
+		return nil, err
+	}
 	var fieldID int64
 	if !f.FieldID.IsNull() && !f.FieldID.IsUnknown() {
 		fieldID = f.FieldID.ValueInt64()
 	}
 
 	return json.Marshal(&Alias{
-		SourceIDs: f.SourceIDs,
+		SourceIDs: sourceIDs,
 		FieldID:   fieldID,
 		Name:      f.Name,
 		Transform: f.Transform,
@@ -459,16 +527,17 @@ func (f icebergTablePartitionField) MarshalJSON() ([]byte, error) {
 
 func (f *icebergTablePartitionField) UnmarshalJSON(b []byte) error {
 	type Alias struct {
-		SourceIDs []int64 `json:"source-ids"`
-		FieldID   int64   `json:"field-id"`
-		Name      string  `json:"name"`
-		Transform string  `json:"transform"`
+		SourceIDs []int  `json:"source-ids"`
+		FieldID   int64  `json:"field-id"`
+		Name      string `json:"name"`
+		Transform string `json:"transform"`
 	}
 	var raw Alias
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
 	}
-	f.SourceIDs = raw.SourceIDs
+	f.SourceIDs = sourceIDsList(raw.SourceIDs)
+	f.SourceNames = types.ListNull(types.StringType)
 	f.FieldID = types.Int64Value(raw.FieldID)
 	f.Name = raw.Name
 	f.Transform = raw.Transform
@@ -478,10 +547,11 @@ func (f *icebergTablePartitionField) UnmarshalJSON(b []byte) error {
 
 func (icebergTablePartitionField) AttrTypes() map[string]attr.Type {
 	return map[string]attr.Type{
-		"source_ids": types.ListType{ElemType: types.Int64Type},
-		"field_id":   types.Int64Type,
-		"name":       types.StringType,
-		"transform":  types.StringType,
+		"source_ids":   types.ListType{ElemType: types.Int64Type},
+		"source_names": types.ListType{ElemType: types.StringType},
+		"field_id":     types.Int64Type,
+		"name":         types.StringType,
+		"transform":    types.StringType,
 	}
 }
 
@@ -542,8 +612,15 @@ func (s *icebergTableSortOrder) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (s *icebergTableSortOrder) ToIceberg() (table.SortOrder, error) {
-	b, err := json.Marshal(s)
+// ToIceberg converts the sort order, first resolving source_name to a field id
+// against schema (the planned table schema). The receiver is not modified.
+func (s *icebergTableSortOrder) ToIceberg(schema *iceberg.Schema) (table.SortOrder, error) {
+	resolved := *s
+	resolved.Fields = slices.Clone(s.Fields)
+	if err := resolved.resolveSourceIDs(schema); err != nil {
+		return table.SortOrder{}, err
+	}
+	b, err := json.Marshal(resolved)
 	if err != nil {
 		return table.SortOrder{}, err
 	}
@@ -555,30 +632,163 @@ func (s *icebergTableSortOrder) ToIceberg() (table.SortOrder, error) {
 	return icebergOrder, nil
 }
 
-func (s *icebergTableSortOrder) FromIceberg(icebergOrder table.SortOrder) error {
+// FromIceberg converts icebergOrder, naming each field's source column from
+// schema (the table's current schema).
+func (s *icebergTableSortOrder) FromIceberg(icebergOrder table.SortOrder, schema *iceberg.Schema) error {
 	s.OrderID = types.Int64Value(int64(icebergOrder.OrderID()))
 	b, err := json.Marshal(icebergOrder)
 	if err != nil {
 		return err
 	}
+	if err := json.Unmarshal(b, s); err != nil {
+		return err
+	}
+	for i := range s.Fields {
+		f := &s.Fields[i]
+		if name, ok := sourceColumnName(schema, int(f.SourceID.ValueInt64())); ok {
+			f.SourceName = types.StringValue(name)
+		}
+	}
 
-	return json.Unmarshal(b, s)
+	return nil
 }
 
+// resolveSourceIDs fills source_id from source_name for fields that name
+// their source column instead of giving an id, and fails for a field with
+// neither. A known source_id is kept, for the same reason as in the partition
+// spec's resolveSourceIDs.
+func (s *icebergTableSortOrder) resolveSourceIDs(schema *iceberg.Schema) error {
+	for i := range s.Fields {
+		f := &s.Fields[i]
+		if isKnown(f.SourceID) {
+			continue
+		}
+		if !isKnown(f.SourceName) {
+			return fmt.Errorf("sort_order.fields[%d] has neither source_id nor source_name", i)
+		}
+		id, err := resolveSourceColumn(schema, f.SourceName.ValueString())
+		if err != nil {
+			return fmt.Errorf("sort_order.fields[%d]: %w", i, err)
+		}
+		f.SourceID = types.Int64Value(int64(id))
+	}
+
+	return nil
+}
+
+// icebergTableSortField mirrors an Iceberg sort field. SourceName exists only
+// in Terraform: it is resolved to SourceID before conversion and never sent
+// to the catalog.
 type icebergTableSortField struct {
-	SourceID  int64  `tfsdk:"source_id" json:"source-id"`
-	Transform string `tfsdk:"transform" json:"transform"`
-	Direction string `tfsdk:"direction" json:"direction"`
-	NullOrder string `tfsdk:"null_order" json:"null-order"`
+	SourceID   types.Int64  `tfsdk:"source_id" json:"source-id"`
+	SourceName types.String `tfsdk:"source_name" json:"-"`
+	Transform  string       `tfsdk:"transform" json:"transform"`
+	Direction  string       `tfsdk:"direction" json:"direction"`
+	NullOrder  string       `tfsdk:"null_order" json:"null-order"`
 }
 
 func (icebergTableSortField) AttrTypes() map[string]attr.Type {
 	return map[string]attr.Type{
-		"source_id":  types.Int64Type,
-		"transform":  types.StringType,
-		"direction":  types.StringType,
-		"null_order": types.StringType,
+		"source_id":   types.Int64Type,
+		"source_name": types.StringType,
+		"transform":   types.StringType,
+		"direction":   types.StringType,
+		"null_order":  types.StringType,
 	}
+}
+
+func (f icebergTableSortField) MarshalJSON() ([]byte, error) {
+	if !isKnown(f.SourceID) {
+		return nil, errors.New("sort field has no resolved source_id")
+	}
+
+	return json.Marshal(struct {
+		SourceID  int64  `json:"source-id"`
+		Transform string `json:"transform"`
+		Direction string `json:"direction"`
+		NullOrder string `json:"null-order"`
+	}{
+		SourceID:  f.SourceID.ValueInt64(),
+		Transform: f.Transform,
+		Direction: f.Direction,
+		NullOrder: f.NullOrder,
+	})
+}
+
+func (f *icebergTableSortField) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		SourceID  int64  `json:"source-id"`
+		Transform string `json:"transform"`
+		Direction string `json:"direction"`
+		NullOrder string `json:"null-order"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	f.SourceID = types.Int64Value(raw.SourceID)
+	f.SourceName = types.StringNull()
+	f.Transform = raw.Transform
+	f.Direction = raw.Direction
+	f.NullOrder = raw.NullOrder
+
+	return nil
+}
+
+// resolveSourceColumn returns the id of the column named name. The lookup is
+// case-sensitive and requires the canonical full name (e.g. "points.element.x",
+// not iceberg-go's "points.x" alias): state stores the canonical name read
+// back from the table, so any other spelling would not match the config.
+func resolveSourceColumn(schema *iceberg.Schema, name string) (int, error) {
+	if schema == nil {
+		return 0, fmt.Errorf("cannot resolve source column %q without a table schema", name)
+	}
+	field, ok := schema.FindFieldByName(name)
+	if !ok {
+		return 0, fmt.Errorf("source column %q not found in the configured schema", name)
+	}
+	if canonical, ok := schema.FindColumnName(field.ID); !ok || canonical != name {
+		return 0, fmt.Errorf("source column %q must be referenced by its full name %q", name, canonical)
+	}
+
+	return field.ID, nil
+}
+
+// sourceColumnName returns the canonical name of the column with the given
+// id, or false if schema has no such column.
+func sourceColumnName(schema *iceberg.Schema, id int) (string, bool) {
+	if schema == nil {
+		return "", false
+	}
+
+	return schema.FindColumnName(id)
+}
+
+func sourceIDsList(ids []int) types.List {
+	elems := make([]attr.Value, len(ids))
+	for i, id := range ids {
+		elems[i] = types.Int64Value(int64(id))
+	}
+
+	return types.ListValueMust(types.Int64Type, elems)
+}
+
+// sourceNamesList names each id from schema; it is null if any id is missing.
+func sourceNamesList(schema *iceberg.Schema, ids []int) types.List {
+	elems := make([]attr.Value, len(ids))
+	for i, id := range ids {
+		name, ok := sourceColumnName(schema, id)
+		if !ok {
+			return types.ListNull(types.StringType)
+		}
+		elems[i] = types.StringValue(name)
+	}
+
+	return types.ListValueMust(types.StringType, elems)
+}
+
+// isKnown reports whether v is neither null nor unknown.
+func isKnown(v attr.Value) bool {
+	return !v.IsNull() && !v.IsUnknown()
 }
 
 type icebergTableSchemaField struct {
