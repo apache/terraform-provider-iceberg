@@ -40,4 +40,4 @@ jobs:
       with:
         persist-credentials: false
     # ASF infra action is only published on the main branch (no release tags), so it is SHA-pinned intentionally; zizmor's ref-version-mismatch is suppressed because the comment cannot name a matching version ref.
-    - uses: apache/infrastructure-actions/allowlist-check@bd72894b857767d42834c186c90767d5c86624bb # zizmor: ignore[ref-version-mismatch] main
+    - uses: apache/infrastructure-actions/allowlist-check@90a251d05123ce3df4a298ae7f708f4d9df71a41 # zizmor: ignore[ref-version-mismatch] main
