@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/apache/iceberg-go"
@@ -28,6 +29,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	rscschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -51,6 +53,7 @@ type icebergTableResourceModel struct {
 	SortOrder        types.Object `tfsdk:"sort_order"`
 	UserProperties   types.Map    `tfsdk:"user_properties"`
 	ServerProperties types.Map    `tfsdk:"server_properties"`
+	PurgeOnDestroy   types.Bool   `tfsdk:"purge_on_destroy"`
 }
 
 type icebergTableResource struct {
@@ -113,6 +116,12 @@ func (r *icebergTableResource) Schema(_ context.Context, _ resource.SchemaReques
 				Description: "Properties returned by the server.",
 				Computed:    true,
 				ElementType: types.StringType,
+			},
+			"purge_on_destroy": rscschema.BoolAttribute{
+				Description: "Whether destroying the resource also deletes the table's data and metadata files. Catalogs such as Amazon S3 Tables reject a drop without purge. Defaults to `false`.",
+				Optional:    true,
+				Computed:    true,
+				Default:     booldefault.StaticBool(false),
 			},
 		},
 	}
@@ -320,6 +329,10 @@ func (r *icebergTableResource) Read(ctx context.Context, req resource.ReadReques
 	r.syncTableToModel(ctx, tbl, &data, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+	// State written before purge_on_destroy existed holds null.
+	if data.PurgeOnDestroy.IsNull() {
+		data.PurgeOnDestroy = types.BoolValue(false)
 	}
 
 	diags = resp.State.Set(ctx, &data)
@@ -667,7 +680,17 @@ func (r *icebergTableResource) Delete(ctx context.Context, req resource.DeleteRe
 	tableName := data.Name.ValueString()
 	tableIdent := append(namespaceName, tableName)
 
-	err := r.catalog.DropTable(ctx, tableIdent)
+	drop := r.catalog.DropTable
+	if data.PurgeOnDestroy.ValueBool() {
+		purger, ok := r.catalog.(catalog.PurgeableTable)
+		if !ok {
+			resp.Diagnostics.AddError("failed to purge table", fmt.Sprintf("catalog type %q does not support purging tables", r.provider.catalogType))
+
+			return
+		}
+		drop = purger.PurgeTable
+	}
+	err := drop(ctx, tableIdent)
 	if err != nil {
 		if errors.Is(err, catalog.ErrNoSuchTable) {
 			// If the table is already gone, we don't need to do anything.
@@ -707,4 +730,5 @@ func (r *icebergTableResource) ImportState(ctx context.Context, req resource.Imp
 
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), types.StringValue(tableName))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("namespace"), namespaceList)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("purge_on_destroy"), types.BoolValue(false))...)
 }
