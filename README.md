@@ -19,6 +19,30 @@
 
 This [Terraform](https://terraform.io) and [OpenTofu](https://www.opentofu.org/) provider allows you to manage Iceberg resources, such as namespaces and tables.
 
+## Installation
+
+The provider is published as `apache/iceberg` on both the
+[Terraform Registry](https://registry.terraform.io/providers/apache/iceberg/latest)
+and the [OpenTofu Registry](https://search.opentofu.org/provider/apache/iceberg/latest).
+Declare it in your configuration and run `terraform init` (or `tofu init`):
+
+```hcl
+terraform {
+  required_providers {
+    iceberg = {
+      source = "apache/iceberg"
+    }
+  }
+}
+```
+
+The official Apache releases are source releases, published with signatures and
+checksums under `apache-iceberg-terraform-<version>/` on
+[downloads.apache.org/iceberg](https://downloads.apache.org/iceberg/). In line
+with the [ASF Release Distribution Policy](https://infra.apache.org/release-distribution),
+the provider binaries on the Terraform and OpenTofu registries are convenience
+builds made from those source releases.
+
 ## Supported Data Sources
 
 - `iceberg_namespace`: Read metadata for an existing namespace (catalog properties).
