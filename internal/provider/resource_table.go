@@ -236,7 +236,7 @@ func (r *icebergTableResource) Create(ctx context.Context, req resource.CreateRe
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		icebergSpec, err := spec.ToIceberg()
+		icebergSpec, err := spec.ToIceberg(tblSchema)
 		if err != nil {
 			resp.Diagnostics.AddError("failed to convert partition spec", err.Error())
 
@@ -252,7 +252,7 @@ func (r *icebergTableResource) Create(ctx context.Context, req resource.CreateRe
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		icebergOrder, err := order.ToIceberg()
+		icebergOrder, err := order.ToIceberg(tblSchema)
 		if err != nil {
 			resp.Diagnostics.AddError("failed to convert sort order", err.Error())
 
@@ -365,9 +365,17 @@ func (r *icebergTableResource) Update(ctx context.Context, req resource.UpdateRe
 	updates := make([]table.Update, 0)
 
 	updates = append(updates, r.calculatePropertyUpdates(ctx, &plan, &state, &resp.Diagnostics)...)
-	updates = append(updates, r.calculateSchemaUpdates(ctx, &plan, &state, tbl, &resp.Diagnostics)...)
-	updates = append(updates, r.calculatePartitionUpdates(ctx, &plan, tbl, &resp.Diagnostics)...)
-	updates = append(updates, r.calculateSortOrderUpdates(ctx, &plan, tbl, &resp.Diagnostics)...)
+	schemaUpdates, plannedSchema := r.calculateSchemaUpdates(ctx, &plan, &state, tbl, &resp.Diagnostics)
+	updates = append(updates, schemaUpdates...)
+
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Source names resolve against the planned schema, so a partition or sort
+	// field may reference a column added in this same apply.
+	updates = append(updates, r.calculatePartitionUpdates(ctx, &plan, tbl, plannedSchema, &resp.Diagnostics)...)
+	updates = append(updates, r.calculateSortOrderUpdates(ctx, &plan, tbl, plannedSchema, &resp.Diagnostics)...)
 
 	if resp.Diagnostics.HasError() {
 		return
@@ -443,7 +451,10 @@ func (r *icebergTableResource) calculatePropertyUpdates(ctx context.Context, pla
 	return updates
 }
 
-func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan, state *icebergTableResourceModel, tbl *table.Table, diags *diag.Diagnostics) []table.Update {
+// calculateSchemaUpdates returns the updates that evolve the table to the
+// planned schema, and that schema with every field ID filled in. The schema is
+// returned even when unchanged, for resolving partition and sort source names.
+func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan, state *icebergTableResourceModel, tbl *table.Table, diags *diag.Diagnostics) ([]table.Update, *iceberg.Schema) {
 	var planSchema, stateSchema icebergTableSchema
 	d := plan.Schema.As(ctx, &planSchema, basetypes.ObjectAsOptions{})
 	diags.Append(d...)
@@ -451,7 +462,7 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 	diags.Append(d...)
 
 	if diags.HasError() {
-		return nil
+		return nil, nil
 	}
 
 	// Reuse existing IDs by name (stable across inserts/reorders), then assign
@@ -461,20 +472,20 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 	if err := planSchema.validateFieldIDs(); err != nil {
 		diags.AddError("invalid field id", err.Error())
 
-		return nil
+		return nil, nil
 	}
 
 	planIceberg, err := planSchema.ToIceberg()
 	if err != nil {
 		diags.AddError("failed to convert plan schema", err.Error())
 
-		return nil
+		return nil, nil
 	}
 	stateIceberg, err := stateSchema.ToIceberg()
 	if err != nil {
 		diags.AddError("failed to convert state schema", err.Error())
 
-		return nil
+		return nil, nil
 	}
 
 	// Normalize by comparing the JSON of the fields list only.
@@ -484,14 +495,14 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 	stateFieldsJson, _ := json.Marshal(stateIceberg.Fields())
 
 	if string(planFieldsJson) == string(stateFieldsJson) {
-		return nil
+		return nil, planIceberg
 	}
 
 	// Reject changes that aren't a valid Iceberg evolution before committing.
 	if err := validateSchemaEvolution(tbl.Schema(), planIceberg); err != nil {
 		diags.AddError("invalid schema evolution", err.Error())
 
-		return nil
+		return nil, nil
 	}
 
 	// Find the highest existing schema ID to ensure the new one is unique.
@@ -508,7 +519,7 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 	if err != nil {
 		diags.AddError("failed to convert plan schema with new ID", err.Error())
 
-		return nil
+		return nil, nil
 	}
 
 	// Return two events:
@@ -517,10 +528,10 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 	return []table.Update{
 		table.NewAddSchemaUpdate(planIceberg),
 		table.NewSetCurrentSchemaUpdate(int(newSchemaID)),
-	}
+	}, planIceberg
 }
 
-func (r *icebergTableResource) calculatePartitionUpdates(ctx context.Context, plan *icebergTableResourceModel, tbl *table.Table, diags *diag.Diagnostics) []table.Update {
+func (r *icebergTableResource) calculatePartitionUpdates(ctx context.Context, plan *icebergTableResourceModel, tbl *table.Table, plannedSchema *iceberg.Schema, diags *diag.Diagnostics) []table.Update {
 	spec := tbl.Spec()
 	if plan.PartitionSpec.IsUnknown() {
 		if spec.NumFields() > 0 {
@@ -548,7 +559,7 @@ func (r *icebergTableResource) calculatePartitionUpdates(ctx context.Context, pl
 		return nil
 	}
 
-	newIcebergSpec, err := planSpec.ToIceberg()
+	newIcebergSpec, err := planSpec.ToIceberg(plannedSchema)
 	if err != nil {
 		diags.AddError("failed to convert partition spec", err.Error())
 
@@ -566,7 +577,7 @@ func (r *icebergTableResource) calculatePartitionUpdates(ctx context.Context, pl
 	return nil
 }
 
-func (r *icebergTableResource) calculateSortOrderUpdates(ctx context.Context, plan *icebergTableResourceModel, tbl *table.Table, diags *diag.Diagnostics) []table.Update {
+func (r *icebergTableResource) calculateSortOrderUpdates(ctx context.Context, plan *icebergTableResourceModel, tbl *table.Table, plannedSchema *iceberg.Schema, diags *diag.Diagnostics) []table.Update {
 	if plan.SortOrder.IsUnknown() {
 		if tbl.SortOrder().OrderID() != 0 {
 			// Create a new unsorted order and set it as default
@@ -593,7 +604,7 @@ func (r *icebergTableResource) calculateSortOrderUpdates(ctx context.Context, pl
 		return nil
 	}
 
-	newIcebergOrder, err := planOrder.ToIceberg()
+	newIcebergOrder, err := planOrder.ToIceberg(plannedSchema)
 	if err != nil {
 		diags.AddError("failed to convert sort order", err.Error())
 

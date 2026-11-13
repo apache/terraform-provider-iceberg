@@ -18,9 +18,12 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 )
 
 func TestAccIcebergTable(t *testing.T) {
@@ -823,6 +826,12 @@ func TestAccIcebergTablePartitionSpecAndSortOrder(t *testing.T) {
 				),
 			},
 			{
+				// Import fills both halves of each source pair, matching state.
+				ResourceName:      "iceberg_table.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			{
 				Config:      testAccIcebergTablePartitionSortConfig(providerCfg, tableName, "bucket[32]", "invalid"),
 				ExpectError: regexp.MustCompile(`(?s)Attribute sort_order\.fields\[0\]\.direction value must be one of:.*"asc".*"desc".*got: "invalid"`),
 			},
@@ -1059,4 +1068,644 @@ resource "iceberg_table" "test" {
   }
 }
 `, tableName, colName)
+}
+
+func TestAccIcebergTablePartitionSortBySourceName(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "by_source_name_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// No column has an explicit id; every source is referenced by name.
+				Config: testAccIcebergTableBySourceNameConfig(providerCfg, tableName, false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.id", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.2.struct_properties.fields.0.id", "4"),
+
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.#", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_ids.#", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_ids.0", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_names.#", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_names.0", "event_time"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.transform", "day"),
+
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.#", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.0.source_id", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.0.source_name", "id"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.1.source_id", "4"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.1.source_name", "location.lat"),
+				),
+			},
+			{
+				Config:   testAccIcebergTableBySourceNameConfig(providerCfg, tableName, false),
+				PlanOnly: true,
+			},
+			{
+				// Import fills both halves of each source pair, matching state.
+				ResourceName:      "iceberg_table.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			{
+				// A new column, plus a partition field and a sort field naming it, in one apply.
+				Config: testAccIcebergTableBySourceNameConfig(providerCfg, tableName, true),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.#", "4"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.3.name", "region"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.3.id", "5"),
+
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.#", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_ids.0", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_names.0", "event_time"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.1.source_ids.0", "5"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.1.source_names.0", "region"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.1.name", "region_identity"),
+
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.#", "3"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.2.source_id", "5"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.2.source_name", "region"),
+				),
+			},
+			{
+				Config:   testAccIcebergTableBySourceNameConfig(providerCfg, tableName, true),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+func testAccIcebergTableBySourceNameConfig(providerCfg, tableName string, withRegion bool) string {
+	regionColumn, regionPartition, regionSort := "", "", ""
+	if withRegion {
+		regionColumn = `,
+      {
+        name     = "region"
+        type     = "string"
+        required = false
+      }`
+		regionPartition = `,
+      {
+        source_names = ["region"]
+        name         = "region_identity"
+        transform    = "identity"
+      }`
+		regionSort = `,
+      {
+        source_name = "region"
+        transform   = "identity"
+        direction   = "asc"
+        null_order  = "nulls-last"
+      }`
+	}
+
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_by_name" {
+  name = ["db_by_name"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_by_name.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        name     = "id"
+        type     = "long"
+        required = true
+      },
+      {
+        name     = "event_time"
+        type     = "timestamptz"
+        required = false
+      },
+      {
+        name     = "location"
+        type     = "struct"
+        required = false
+        struct_properties = {
+          fields = [
+            {
+              name     = "lat"
+              type     = "double"
+              required = false
+            }
+          ]
+        }
+      }%s
+    ]
+  }
+  partition_spec = {
+    fields = [
+      {
+        source_names = ["event_time"]
+        name         = "event_time_day"
+        transform    = "day"
+      }%s
+    ]
+  }
+  sort_order = {
+    fields = [
+      {
+        source_name = "id"
+        transform   = "identity"
+        direction   = "asc"
+        null_order  = "nulls-first"
+      },
+      {
+        source_name = "location.lat"
+        transform   = "identity"
+        direction   = "desc"
+        null_order  = "nulls-last"
+      }%s
+    ]
+  }
+}
+`, tableName, regionColumn, regionPartition, regionSort)
+}
+
+func TestAccIcebergTableRenameSourceColumn(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "rename_source_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableRenameSourceConfig(providerCfg, tableName, "ts"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.spec_id", "0"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_ids.0", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_names.0", "ts"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.order_id", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.0.source_name", "ts"),
+				),
+			},
+			{
+				// Renaming the column (same id) and its references together
+				// leaves the partition spec and sort order as they were.
+				Config: testAccIcebergTableRenameSourceConfig(providerCfg, tableName, "event_ts"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.name", "event_ts"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.id", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.spec_id", "0"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.field_id", "1000"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_ids.0", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_names.0", "event_ts"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.order_id", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.0.source_id", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.0.source_name", "event_ts"),
+				),
+			},
+			{
+				Config:   testAccIcebergTableRenameSourceConfig(providerCfg, tableName, "event_ts"),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+func testAccIcebergTableRenameSourceConfig(providerCfg, tableName, tsName string) string {
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_rename_source" {
+  name = ["db_rename_source"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_rename_source.name
+  name      = "%[1]s"
+  schema = {
+    fields = [
+      {
+        id       = 1
+        name     = "id"
+        type     = "long"
+        required = true
+      },
+      {
+        id       = 2
+        name     = "%[2]s"
+        type     = "timestamptz"
+        required = false
+      }
+    ]
+  }
+  partition_spec = {
+    fields = [
+      {
+        source_names = ["%[2]s"]
+        name         = "ts_day"
+        transform    = "day"
+      }
+    ]
+  }
+  sort_order = {
+    fields = [
+      {
+        source_name = "%[2]s"
+        transform   = "identity"
+        direction   = "asc"
+        null_order  = "nulls-first"
+      }
+    ]
+  }
+}
+`, tableName, tsName)
+}
+
+func TestAccIcebergTableSourceReferenceValidation(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "source_validation_table"
+	both := regexp.MustCompile(`(?s)Invalid Attribute Combination.*2 attributes specified when one \(and only one\) of`)
+	neither := regexp.MustCompile(`(?s)Invalid Attribute Combination.*No attribute specified when one \(and only one\) of`)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccIcebergTableSourceRefConfig(providerCfg, tableName, `source_ids = [1], source_names = ["id"]`, `source_name = "id"`),
+				ExpectError: both,
+			},
+			{
+				Config:      testAccIcebergTableSourceRefConfig(providerCfg, tableName, ``, `source_name = "id"`),
+				ExpectError: neither,
+			},
+			{
+				Config:      testAccIcebergTableSourceRefConfig(providerCfg, tableName, `source_names = ["id"]`, `source_id = 1, source_name = "id"`),
+				ExpectError: both,
+			},
+			{
+				Config:      testAccIcebergTableSourceRefConfig(providerCfg, tableName, `source_names = ["id"]`, ``),
+				ExpectError: neither,
+			},
+			{
+				Config:      testAccIcebergTableSourceRefConfig(providerCfg, tableName, `source_names = ["missing"]`, `source_name = "id"`),
+				ExpectError: regexp.MustCompile(`(?s)failed to convert partition spec.*partition field "p".*source column "missing" not found`),
+			},
+			{
+				Config:      testAccIcebergTableSourceRefConfig(providerCfg, tableName, `source_names = ["id"]`, `source_name = "ID"`),
+				ExpectError: regexp.MustCompile(`(?s)failed to convert sort order.*source column "ID" not found`),
+			},
+		},
+	})
+}
+
+func testAccIcebergTableSourceRefConfig(providerCfg, tableName, partitionRef, sortRef string) string {
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_source_validation" {
+  name = ["db_source_validation"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_source_validation.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        name     = "id"
+        type     = "long"
+        required = true
+      }
+    ]
+  }
+  partition_spec = {
+    fields = [
+      {
+        %s
+        name      = "p"
+        transform = "identity"
+      }
+    ]
+  }
+  sort_order = {
+    fields = [
+      {
+        %s
+        transform  = "identity"
+        direction  = "asc"
+        null_order = "nulls-first"
+      }
+    ]
+  }
+}
+`, tableName, partitionRef, sortRef)
+}
+
+// TestAccIcebergTableMigrateSourceIDsToNames covers moving an existing table
+// from explicit ids to names: the switch itself must be a no-op.
+func TestAccIcebergTableMigrateSourceIDsToNames(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "migrate_to_names_table"
+
+	unchangedIDs := resource.ComposeTestCheckFunc(
+		resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.id", "1"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.id", "2"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.2.id", "3"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.2.struct_properties.fields.0.id", "4"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_ids.0", "1"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_names.0", "snapshot_date"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.0.source_id", "1"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.0.source_name", "snapshot_date"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.1.source_id", "2"),
+		resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.1.source_name", "market_code"),
+	)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableMigrateConfig(providerCfg, tableName, false, false),
+				Check:  unchangedIDs,
+			},
+			{
+				Config: testAccIcebergTableMigrateConfig(providerCfg, tableName, true, false),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: unchangedIDs,
+			},
+			{
+				// Partition by a nested struct field, by name.
+				Config: testAccIcebergTableMigrateConfig(providerCfg, tableName, true, true),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.#", "2"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.0.source_ids.0", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.1.source_ids.0", "4"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.1.source_names.0", "collection_info.source"),
+				),
+			},
+		},
+	})
+}
+
+func testAccIcebergTableMigrateConfig(providerCfg, tableName string, byName, nestedPartition bool) string {
+	id := func(n int) string {
+		if byName {
+			return ""
+		}
+
+		return fmt.Sprintf("id = %d\n", n)
+	}
+	partitionRef, sortRef1, sortRef2 := `source_ids = [1]`, `source_id = 1`, `source_id = 2`
+	if byName {
+		partitionRef, sortRef1, sortRef2 = `source_names = ["snapshot_date"]`, `source_name = "snapshot_date"`, `source_name = "market_code"`
+	}
+	nested := ""
+	if nestedPartition {
+		nested = `,
+      {
+        source_names = ["collection_info.source"]
+        name         = "collection_source"
+        transform    = "identity"
+      }`
+	}
+
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_migrate" {
+  name = ["db_migrate"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_migrate.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        %s
+        name     = "snapshot_date"
+        type     = "date"
+        required = true
+      },
+      {
+        %s
+        name     = "market_code"
+        type     = "string"
+        required = false
+      },
+      {
+        %s
+        name     = "collection_info"
+        type     = "struct"
+        required = false
+        struct_properties = {
+          fields = [
+            {
+              %s
+              name     = "source"
+              type     = "string"
+              required = false
+            }
+          ]
+        }
+      }
+    ]
+  }
+  partition_spec = {
+    fields = [
+      {
+        %s
+        name      = "snapshot_date_identity"
+        transform = "identity"
+      }%s
+    ]
+  }
+  sort_order = {
+    fields = [
+      {
+        %s
+        transform  = "identity"
+        direction  = "asc"
+        null_order = "nulls-first"
+      },
+      {
+        %s
+        transform  = "identity"
+        direction  = "asc"
+        null_order = "nulls-first"
+      }
+    ]
+  }
+}
+`, tableName, id(1), id(2), id(3), id(4), partitionRef, nested, sortRef1, sortRef2)
+}
+
+// TestAccIcebergTableSourceFieldListChanges removes, inserts and reorders
+// partition and sort fields that mix id and name references. Terraform matches
+// list elements by position, so a field that shifts must still end up with its
+// own ids and names rather than its neighbour's.
+func TestAccIcebergTableSourceFieldListChanges(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "source_field_list_table"
+
+	partTS := `{ source_names = ["ts"], name = "ts_day", transform = "day" }`
+	partRegion := `{ source_ids = [3], name = "region_identity", transform = "identity" }`
+	partCategory := `{ source_names = ["category"], name = "category_bucket", transform = "bucket[4]" }`
+	partID := `{ source_ids = [1], name = "id_bucket", transform = "bucket[8]" }`
+
+	sortID := `{ source_id = 1, transform = "identity", direction = "asc", null_order = "nulls-first" }`
+	sortRegion := `{ source_name = "region", transform = "identity", direction = "desc", null_order = "nulls-last" }`
+	sortCategory := `{ source_id = 4, transform = "identity", direction = "asc", null_order = "nulls-last" }`
+	sortTS := `{ source_name = "ts", transform = "identity", direction = "asc", null_order = "nulls-first" }`
+
+	// Each step leaves a spec and sort order the table has not had before.
+	steps := []struct {
+		partitions, sorts []string
+		check             resource.TestCheckFunc
+	}{
+		{
+			partitions: []string{partTS, partRegion, partCategory},
+			sorts:      []string{sortID, sortRegion, sortCategory},
+			check: resource.ComposeTestCheckFunc(
+				checkPartitionSource(0, "ts_day", 2, "ts"),
+				checkPartitionSource(1, "region_identity", 3, "region"),
+				checkPartitionSource(2, "category_bucket", 4, "category"),
+				checkSortSource(0, 1, "id"),
+				checkSortSource(1, 3, "region"),
+				checkSortSource(2, 4, "category"),
+			),
+		},
+		{
+			// Remove the middle field.
+			partitions: []string{partTS, partCategory},
+			sorts:      []string{sortID, sortCategory},
+			check: resource.ComposeTestCheckFunc(
+				resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.#", "2"),
+				checkPartitionSource(0, "ts_day", 2, "ts"),
+				checkPartitionSource(1, "category_bucket", 4, "category"),
+				resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.#", "2"),
+				checkSortSource(0, 1, "id"),
+				checkSortSource(1, 4, "category"),
+			),
+		},
+		{
+			// Remove the first field.
+			partitions: []string{partCategory},
+			sorts:      []string{sortCategory},
+			check: resource.ComposeTestCheckFunc(
+				resource.TestCheckResourceAttr("iceberg_table.test", "partition_spec.fields.#", "1"),
+				checkPartitionSource(0, "category_bucket", 4, "category"),
+				resource.TestCheckResourceAttr("iceberg_table.test", "sort_order.fields.#", "1"),
+				checkSortSource(0, 4, "category"),
+			),
+		},
+		{
+			// Insert a field at the beginning.
+			partitions: []string{partID, partCategory},
+			sorts:      []string{sortTS, sortCategory},
+			check: resource.ComposeTestCheckFunc(
+				checkPartitionSource(0, "id_bucket", 1, "id"),
+				checkPartitionSource(1, "category_bucket", 4, "category"),
+				checkSortSource(0, 2, "ts"),
+				checkSortSource(1, 4, "category"),
+			),
+		},
+		{
+			// Reorder.
+			partitions: []string{partCategory, partID},
+			sorts:      []string{sortCategory, sortTS},
+			check: resource.ComposeTestCheckFunc(
+				checkPartitionSource(0, "category_bucket", 4, "category"),
+				checkPartitionSource(1, "id_bucket", 1, "id"),
+				checkSortSource(0, 4, "category"),
+				checkSortSource(1, 2, "ts"),
+			),
+		},
+	}
+
+	var testSteps []resource.TestStep
+	for _, step := range steps {
+		config := testAccIcebergTableSourceFieldsConfig(providerCfg, tableName, step.partitions, step.sorts)
+		testSteps = append(testSteps,
+			resource.TestStep{Config: config, Check: step.check},
+			resource.TestStep{Config: config, PlanOnly: true},
+		)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps:                    testSteps,
+	})
+}
+
+func checkPartitionSource(index int, name string, sourceID int, sourceName string) resource.TestCheckFunc {
+	prefix := fmt.Sprintf("partition_spec.fields.%d.", index)
+
+	return resource.ComposeTestCheckFunc(
+		resource.TestCheckResourceAttr("iceberg_table.test", prefix+"name", name),
+		resource.TestCheckResourceAttr("iceberg_table.test", prefix+"source_ids.0", strconv.Itoa(sourceID)),
+		resource.TestCheckResourceAttr("iceberg_table.test", prefix+"source_names.0", sourceName),
+	)
+}
+
+func checkSortSource(index int, sourceID int, sourceName string) resource.TestCheckFunc {
+	prefix := fmt.Sprintf("sort_order.fields.%d.", index)
+
+	return resource.ComposeTestCheckFunc(
+		resource.TestCheckResourceAttr("iceberg_table.test", prefix+"source_id", strconv.Itoa(sourceID)),
+		resource.TestCheckResourceAttr("iceberg_table.test", prefix+"source_name", sourceName),
+	)
+}
+
+func testAccIcebergTableSourceFieldsConfig(providerCfg, tableName string, partitions, sorts []string) string {
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_source_fields" {
+  name = ["db_source_fields"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_source_fields.name
+  name      = "%s"
+  schema = {
+    fields = [
+      { id = 1, name = "id", type = "long", required = true },
+      { id = 2, name = "ts", type = "timestamptz", required = false },
+      { id = 3, name = "region", type = "string", required = false },
+      { id = 4, name = "category", type = "string", required = false },
+    ]
+  }
+  partition_spec = {
+    fields = [
+      %s
+    ]
+  }
+  sort_order = {
+    fields = [
+      %s
+    ]
+  }
+}
+`, tableName, strings.Join(partitions, ",\n      "), strings.Join(sorts, ",\n      "))
 }
