@@ -299,6 +299,7 @@ internal/sync/singleflight, in github.com/aws/smithy-go
 encoding/xml/element.go, in github.com/aws/smithy-go
 encoding/xml/escape.go, in github.com/aws/smithy-go
 encoding/json/escape.go, in github.com/aws/smithy-go
+transport/http/protocol/internal/json/internal/stdlib, in github.com/aws/smithy-go
 format.go, in github.com/cockroachdb/apd/v3
 loop.go, in github.com/cockroachdb/apd/v3
 simplelru/list.go, in github.com/hashicorp/golang-lru/v2
