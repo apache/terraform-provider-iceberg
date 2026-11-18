@@ -548,9 +548,14 @@ func TestAccIcebergTableDroppedFieldIDReuse(t *testing.T) {
 				ExpectError: regexp.MustCompile(`(?s)invalid field id.*belonged to dropped field "dropped"`),
 			},
 			{
-				// Re-adding the dropped field by name doesn't restore its id either.
-				Config:      testAccIcebergTableSecondFieldConfig(providerCfg, tableName, "dropped", "2"),
-				ExpectError: regexp.MustCompile(`(?s)invalid field id.*belonged to dropped field "dropped"`),
+				// Re-declaring the dropped field exactly as it was is a revert to
+				// schema 0, not a new field reusing its id.
+				Config: testAccIcebergTableSecondFieldConfig(providerCfg, tableName, "dropped", "2"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.name", "dropped"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.id", "2"),
+				),
 			},
 			{
 				Config: testAccIcebergTableSecondFieldConfig(providerCfg, tableName, "replacement", ""),
