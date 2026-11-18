@@ -253,7 +253,7 @@ provider "iceberg" {
 Optional:
 
 - `oauth2` (Attributes) Authenticate with the OAuth2 client credentials flow. Tokens are fetched and refreshed automatically. (see [below for nested schema](#nestedatt--auth--oauth2))
-- `sigv4` (Attributes) Sign requests with AWS Signature Version 4, as catalogs such as AWS Glue require. Setting this attribute enables signing. (see [below for nested schema](#nestedatt--auth--sigv4))
+- `sigv4` (Attributes) Sign requests with AWS Signature Version 4, as catalogs such as AWS Glue and Amazon S3 Tables require. Setting this attribute enables signing. (see [below for nested schema](#nestedatt--auth--sigv4))
 
 <a id="nestedatt--auth--oauth2"></a>
 ### Nested Schema for `auth.oauth2`
@@ -278,7 +278,7 @@ Optional:
 - `region` (String) Signing region. When omitted, the region from the AWS environment (`AWS_REGION`, shared config) is used.
 - `secret_access_key` (String, Sensitive) Secret access key. Must be set together with `access_key_id`.
 - `session_token` (String, Sensitive) Session token for temporary (STS) credentials. Requires `access_key_id` and `secret_access_key`.
-- `signing_name` (String) Signing service name (the credential-scope service). Defaults to `execute-api`. Use `glue` for AWS Glue.
+- `signing_name` (String) Signing service name (the credential-scope service). Defaults to `execute-api`. Use `glue` for AWS Glue and `s3tables` for Amazon S3 Tables.
 
 ## AWS SigV4 authentication
 
@@ -310,6 +310,23 @@ provider "iceberg" {
       region       = "us-east-1"
       signing_name = "glue"
       # Omit the keys to use the standard AWS credential chain.
+    }
+  }
+}
+```
+
+For Amazon S3 Tables, `warehouse` is the table bucket ARN.
+
+```terraform
+# Amazon S3 Tables REST catalog
+provider "iceberg" {
+  catalog_uri = "https://s3tables.us-east-1.amazonaws.com/iceberg"
+  warehouse   = "arn:aws:s3tables:us-east-1:123456789012:bucket/example-bucket"
+
+  auth = {
+    sigv4 = {
+      region       = "us-east-1"
+      signing_name = "s3tables"
     }
   }
 }
