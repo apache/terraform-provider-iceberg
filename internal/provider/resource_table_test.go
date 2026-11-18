@@ -432,6 +432,110 @@ resource "iceberg_table" "test" {
 `, tableName, extra)
 }
 
+func testAccIcebergTableReparentConfig(providerCfg, tableName, childParent string) string {
+	// IDs follow the REST catalog's assign-fresh-ids order (top-level fields
+	// first, then nested) so create does not fail with an inconsistent result.
+	// keep_* siblings keep both structs non-empty after apply.
+	leftFields := `
+            {
+              id       = 3
+              name     = "keep_left"
+              type     = "string"
+              required = false
+            }`
+	rightFields := `
+            {
+              id       = 5
+              name     = "keep_right"
+              type     = "string"
+              required = false
+            }`
+	child := `
+            {
+              id       = 4
+              name     = "child"
+              type     = "long"
+              required = false
+            }`
+	if childParent == "left" {
+		leftFields += "," + child
+	} else {
+		rightFields += "," + child
+	}
+
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_reparent" {
+  name = ["db_reparent"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_reparent.name
+  name      = "%s"
+  schema = {
+    fields = [
+      {
+        id       = 1
+        name     = "left"
+        type     = "struct"
+        required = false
+        struct_properties = {
+          fields = [%s
+          ]
+        }
+      },
+      {
+        id       = 2
+        name     = "right"
+        type     = "struct"
+        required = false
+        struct_properties = {
+          fields = [%s
+          ]
+        }
+      }
+    ]
+  }
+}
+`, tableName, leftFields, rightFields)
+}
+
+func TestAccIcebergTableReparentFieldIDs(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+	tableName := "reparent_ids_table"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableReparentConfig(providerCfg, tableName, "left"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.struct_properties.fields.1.id", "4"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.struct_properties.fields.1.name", "child"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.struct_properties.fields.#", "1"),
+				),
+			},
+			{
+				Config:      testAccIcebergTableReparentConfig(providerCfg, tableName, "right"),
+				ExpectError: regexp.MustCompile(`(?s)invalid schema evolution.*cannot move from parent id 1 \("left"\).*to parent id 2 \("right"\)`),
+			},
+			{
+				// The rejected reparent did not reach the catalog.
+				Config: testAccIcebergTableReparentConfig(providerCfg, tableName, "left"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.struct_properties.fields.1.id", "4"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.struct_properties.fields.#", "1"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccIcebergTableReservedFieldIDs(t *testing.T) {
 	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
 	if catalogURI == "" {
