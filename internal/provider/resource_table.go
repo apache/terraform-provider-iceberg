@@ -118,7 +118,7 @@ func (r *icebergTableResource) Schema(_ context.Context, _ resource.SchemaReques
 				ElementType: types.StringType,
 			},
 			"purge_on_destroy": rscschema.BoolAttribute{
-				Description: "Whether destroying the resource also deletes the table's data and metadata files. Catalogs such as Amazon S3 Tables reject a drop without purge. Defaults to `false`.",
+				Description: "Whether destroying the resource also deletes the table's data and metadata files. The value takes effect only after it is applied. Run `terraform apply` before `terraform destroy`. Defaults to `false`.",
 				Optional:    true,
 				Computed:    true,
 				Default:     booldefault.StaticBool(false),

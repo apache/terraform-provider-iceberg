@@ -117,7 +117,7 @@ schema = {
 ### Optional
 
 - `partition_spec` (Attributes) The partition spec of the table. (see [below for nested schema](#nestedatt--partition_spec))
-- `purge_on_destroy` (Boolean) Whether destroying the resource also deletes the table's data and metadata files. Catalogs such as Amazon S3 Tables reject a drop without purge. Defaults to `false`.
+- `purge_on_destroy` (Boolean) Whether destroying the resource also deletes the table's data and metadata files. The value takes effect only after it is applied. Run `terraform apply` before `terraform destroy`. Defaults to `false`.
 - `sort_order` (Attributes) The sort order of the table. (see [below for nested schema](#nestedatt--sort_order))
 - `user_properties` (Map of String) User-defined properties for the table.
 
