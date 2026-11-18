@@ -495,19 +495,16 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
+	if tbl.Schema().Equals(planIceberg) {
+		return nil
+	}
+
 	// Reject changes that aren't a valid Iceberg evolution before committing.
+	// This includes reverting to an earlier schema: that is still an evolution
+	// from the current schema, and may undo a promotion that data relies on.
 	if err := validateSchemaEvolution(tbl.Schema(), planIceberg); err != nil {
 		diags.AddError("invalid schema evolution", err.Error())
 
-		return nil
-	}
-	if err := validateNewFieldIDs(tbl.Metadata(), planIceberg); err != nil {
-		diags.AddError("invalid field id", err.Error())
-
-		return nil
-	}
-
-	if tbl.Schema().Equals(planIceberg) {
 		return nil
 	}
 
@@ -518,6 +515,14 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 			return []table.Update{table.NewSetCurrentSchemaUpdate(existing.ID)}
 		}
 		maxSchemaID = max(maxSchemaID, existing.ID)
+	}
+
+	// Only a genuinely new schema can introduce field IDs, so an exact revert
+	// that re-declares a dropped column under its old ID is not rejected.
+	if err := validateNewFieldIDs(tbl.Metadata(), planIceberg); err != nil {
+		diags.AddError("invalid field id", err.Error())
+
+		return nil
 	}
 
 	// A new schema: add it under the next unused ID and make it current.
@@ -620,12 +625,8 @@ func sameSortFields(a, b table.SortOrder) bool {
 	if a.Len() != b.Len() {
 		return false
 	}
-	var aFields []table.SortField
-	for _, f := range a.Fields() {
-		aFields = append(aFields, f)
-	}
-	for i, f := range b.Fields() {
-		if !aFields[i].Equals(f) {
+	for i := range a.Len() {
+		if !a.Field(i).Equals(b.Field(i)) {
 			return false
 		}
 	}

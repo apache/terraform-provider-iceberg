@@ -1369,7 +1369,9 @@ func updateActions(t *testing.T, updates []table.Update) string {
 }
 
 const (
-	schemaV0 = `{"schema-id": 0, "fields": [
+	// schemaV0 has schema 0's fields but the current schema's ID, as a real
+	// plan would, so matching an existing schema must ignore the ID.
+	schemaV0 = `{"schema-id": 1, "fields": [
   {"id": 1, "name": "id", "required": true, "type": "long"},
   {"id": 2, "name": "ts", "required": false, "type": "timestamp"}]}`
 	schemaV1 = `{"schema-id": 1, "fields": [
@@ -1408,6 +1410,27 @@ func TestCalculateSchemaUpdatesReusesExistingSchema(t *testing.T) {
 				t.Errorf("updates = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// Reverting to an earlier schema is still an evolution from the current one,
+// so undoing a type promotion must be rejected rather than reusing the old ID.
+func TestCalculateSchemaUpdatesRejectsRevertingPromotion(t *testing.T) {
+	// Make schema 0's "id" an int, so schema 1 (current) promoted it to long.
+	promoted := strings.Replace(historyMetadata, `"type": "long"`, `"type": "int"`, 1)
+	meta, err := table.ParseMetadataString(promoted)
+	if err != nil {
+		t.Fatalf("parse metadata: %v", err)
+	}
+	tbl := table.New(table.Identifier{"db", "t"}, meta, "s3://bucket/t/metadata/v1.json", nil, nil)
+
+	revert := strings.Replace(schemaV0, `"type": "long"`, `"type": "int"`, 1)
+	var diags diag.Diagnostics
+	plan := &icebergTableResourceModel{Schema: schemaObject(t, revert)}
+	state := &icebergTableResourceModel{Schema: schemaObject(t, schemaV1)}
+	updates := (&icebergTableResource{}).calculateSchemaUpdates(context.Background(), plan, state, tbl, &diags)
+	if !diags.HasError() {
+		t.Fatalf("expected an invalid schema evolution error, got updates %q", updateActions(t, updates))
 	}
 }
 
