@@ -275,6 +275,7 @@ Optional:
 Optional:
 
 - `access_key_id` (String, Sensitive) Access key ID. When omitted, the standard AWS credential chain (environment, shared config, instance role) is used.
+- `profile` (String) Named profile from the shared AWS config and credentials files. When omitted, the standard AWS credential chain selects the profile (`AWS_PROFILE`, then `default`). Cannot be set together with `access_key_id`.
 - `region` (String) Signing region. When omitted, the region from the AWS environment (`AWS_REGION`, shared config) is used.
 - `secret_access_key` (String, Sensitive) Secret access key. Must be set together with `access_key_id`.
 - `session_token` (String, Sensitive) Session token for temporary (STS) credentials. Requires `access_key_id` and `secret_access_key`.

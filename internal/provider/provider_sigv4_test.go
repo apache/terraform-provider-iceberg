@@ -325,3 +325,35 @@ func TestNewCatalogSharesConnectionsUnderSigV4(t *testing.T) {
 
 	assert.Equal(t, int32(1), conns.Load(), "catalogs reuse one connection pool instead of leaving one open each")
 }
+
+func TestNewCatalogSignsWithConfiguredProfile(t *testing.T) {
+	isolateAWSEnv(t)
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	configFile := filepath.Join(t.TempDir(), "config")
+	require.NoError(t, os.WriteFile(configFile, []byte(`[profile ambient]
+aws_access_key_id = AMBIENTPROFILEKEY
+aws_secret_access_key = AMBIENTPROFILESECRET
+
+[profile named]
+aws_access_key_id = NAMEDKEY
+aws_secret_access_key = NAMEDSECRET
+region = eu-central-1
+`), 0o600))
+	t.Setenv("AWS_CONFIG_FILE", configFile)
+	t.Setenv("AWS_PROFILE", "ambient")
+
+	headers, err := configHeaders(t, &icebergProvider{sigv4: &sigv4Config{profile: "named"}})
+	require.NoError(t, err)
+
+	assert.Regexp(t, `Credential=NAMEDKEY/\d{8}/eu-central-1/execute-api/aws4_request`,
+		headers.Get("Authorization"), "the configured profile wins over AWS_PROFILE and supplies the region")
+}
+
+func TestNewCatalogRejectsUnknownProfile(t *testing.T) {
+	isolateAWSEnv(t)
+
+	_, err := configHeaders(t, &icebergProvider{sigv4: &sigv4Config{profile: "missing", region: "us-east-1"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing")
+}
