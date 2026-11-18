@@ -1434,6 +1434,47 @@ func TestCalculateSchemaUpdatesRejectsRevertingPromotion(t *testing.T) {
 	}
 }
 
+// Returning to a schema that had a since-dropped field re-declares that field
+// with its old ID. That is an exact match for an existing schema, so it must
+// reuse that schema rather than be rejected as dropped field ID reuse.
+func TestCalculateSchemaUpdatesRevertsPastDroppedField(t *testing.T) {
+	// Make schema 0 current, so schema 1's "b" (id 3) is a dropped field.
+	dropped := strings.Replace(historyMetadata, `"current-schema-id": 1`, `"current-schema-id": 0`, 1)
+	meta, err := table.ParseMetadataString(dropped)
+	if err != nil {
+		t.Fatalf("parse metadata: %v", err)
+	}
+	tbl := table.New(table.Identifier{"db", "t"}, meta, "s3://bucket/t/metadata/v1.json", nil, nil)
+	r := &icebergTableResource{}
+
+	cases := map[string]struct {
+		plan    string
+		want    string
+		wantErr bool
+	}{
+		"exact revert re-declaring dropped id": {plan: schemaV1, want: "set-current-schema(1);"},
+		"new schema reusing dropped id": {plan: `{"schema-id": 0, "fields": [
+  {"id": 1, "name": "id", "required": true, "type": "long"},
+  {"id": 2, "name": "ts", "required": false, "type": "timestamp"},
+  {"id": 3, "name": "renamed_b", "required": false, "type": "string"}]}`, wantErr: true},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var diags diag.Diagnostics
+			plan := &icebergTableResourceModel{Schema: schemaObject(t, tc.plan)}
+			state := &icebergTableResourceModel{Schema: schemaObject(t, schemaV0)}
+			got := updateActions(t, r.calculateSchemaUpdates(context.Background(), plan, state, tbl, &diags))
+			if diags.HasError() != tc.wantErr {
+				t.Fatalf("diagnostics = %v, wantErr %v", diags, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("updates = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCalculatePartitionUpdatesReusesExistingSpec(t *testing.T) {
 	tbl := historyTable(t)
 	r := &icebergTableResource{}
