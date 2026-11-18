@@ -18,6 +18,8 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/apache/iceberg-go"
@@ -315,6 +317,44 @@ func validateSchemaEvolution(current, planned *iceberg.Schema) error {
 			if err := validateFieldEvolution(cur, plan); err != nil {
 				return err
 			}
+		}
+	}
+
+	return nil
+}
+
+// validateNewFieldIDs rejects a planned field whose id is not in the current
+// schema but was already assigned, by a past schema or up to last-column-id.
+func validateNewFieldIDs(metadata table.Metadata, planned *iceberg.Schema) error {
+	currentByID, err := iceberg.IndexByID(metadata.CurrentSchema())
+	if err != nil {
+		return err
+	}
+	plannedNames, err := iceberg.IndexNameByID(planned)
+	if err != nil {
+		return err
+	}
+
+	pastNames := map[int]string{}
+	for _, s := range metadata.Schemas() {
+		names, err := iceberg.IndexNameByID(s)
+		if err != nil {
+			return err
+		}
+		maps.Copy(pastNames, names)
+	}
+
+	lastColumnID := metadata.LastColumnID()
+	for _, id := range slices.Sorted(maps.Keys(plannedNames)) {
+		if _, ok := currentByID[id]; ok {
+			continue
+		}
+		name := plannedNames[id]
+		if past, ok := pastNames[id]; ok {
+			return fmt.Errorf("field %q has id %d, which belonged to dropped field %q; ids of dropped fields cannot be reused", name, id, past)
+		}
+		if id <= lastColumnID {
+			return fmt.Errorf("field %q has id %d, which the table has already assigned; new fields need ids above the last-column-id %d", name, id, lastColumnID)
 		}
 	}
 
