@@ -110,14 +110,14 @@ schema = {
 
 Partition and sort fields identify their source columns by field id
 (`source_ids` / `source_id`) or by column name (`source_names` /
-`source_name`). Set exactly one of each pair, the provider fills in the other.
+`source_name`). Set exactly one of each pair; the provider fills in the other.
 Because the other attribute is computed, any change to the table shows it as
 `(known after apply)` in the plan: `source_names` / `source_name` when you use
 ids, and `source_ids` / `source_id` when you use names. The value itself does
 not change unless the referenced column does.
 
 Names are resolved against the planned schema at apply time, so a partition or
-sort field can name a column added in the same apply until then the plan shows
+sort field can name a column added in the same apply; until then the plan shows
 the ids as `(known after apply)`. Names are case-sensitive, and nested struct
 fields use their full dotted name (for example `location.lat`).
 
@@ -477,8 +477,8 @@ Required:
 Optional:
 
 - `field_id` (Number) The partition field ID.
-- `source_ids` (List of Number) The source field IDs. Set exactly one of source_ids or source_names the other is computed.
-- `source_names` (List of String) The source column names, resolved to source_ids at apply time. Nested struct fields use their full dotted name (e.g. 'location.lat'). Set exactly one of source_ids or source_names the other is computed.
+- `source_ids` (List of Number) The source field IDs. Set exactly one of source_ids or source_names; the other is computed.
+- `source_names` (List of String) The source column names, resolved to source_ids at apply time. Nested struct fields use their full dotted name (e.g. 'location.lat'). Set exactly one of source_ids or source_names; the other is computed.
 
 
 
@@ -500,8 +500,8 @@ Required:
 
 Optional:
 
-- `source_id` (Number) The source field ID. Set exactly one of source_id or source_name the other is computed.
-- `source_name` (String) The source column name, resolved to source_id at apply time. Nested struct fields use their full dotted name (e.g. 'location.lat'). Set exactly one of source_id or source_name the other is computed.
+- `source_id` (Number) The source field ID. Set exactly one of source_id or source_name; the other is computed.
+- `source_name` (String) The source column name, resolved to source_id at apply time. Nested struct fields use their full dotted name (e.g. 'location.lat'). Set exactly one of source_id or source_name; the other is computed.
 
 ## Import
 

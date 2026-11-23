@@ -1352,6 +1352,50 @@ func sortObject(t *testing.T, raw string) types.Object {
 	}, raw)
 }
 
+// specObjectByName is a planned partition spec with one field referencing its
+// source by name, its source ids unknown as Terraform plans them.
+func specObjectByName(t *testing.T, sourceName, name, transform string) types.Object {
+	t.Helper()
+	spec := icebergTablePartitionSpec{
+		SpecID: types.Int64Unknown(),
+		Fields: []icebergTablePartitionField{{
+			SourceIDs:   types.ListUnknown(types.Int64Type),
+			SourceNames: stringList(sourceName),
+			FieldID:     types.Int64Unknown(),
+			Name:        name,
+			Transform:   transform,
+		}},
+	}
+	obj, d := types.ObjectValueFrom(context.Background(), icebergTablePartitionSpec{}.AttrTypes(), spec)
+	if d.HasError() {
+		t.Fatalf("spec object: %v", d)
+	}
+
+	return obj
+}
+
+// sortObjectByName is a planned sort order with one field referencing its
+// source by name, its source id unknown as Terraform plans it.
+func sortObjectByName(t *testing.T, sourceName, direction, nullOrder string) types.Object {
+	t.Helper()
+	order := icebergTableSortOrder{
+		OrderID: types.Int64Unknown(),
+		Fields: []icebergTableSortField{{
+			SourceID:   types.Int64Unknown(),
+			SourceName: types.StringValue(sourceName),
+			Transform:  "identity",
+			Direction:  direction,
+			NullOrder:  nullOrder,
+		}},
+	}
+	obj, d := types.ObjectValueFrom(context.Background(), icebergTableSortOrder{}.AttrTypes(), order)
+	if d.HasError() {
+		t.Fatalf("sort order object: %v", d)
+	}
+
+	return obj
+}
+
 func updateActions(t *testing.T, updates []table.Update) string {
 	t.Helper()
 	b, err := json.Marshal(updates)
@@ -1514,6 +1558,14 @@ func TestCalculatePartitionUpdatesReusesExistingSpec(t *testing.T) {
 			plan: specObject(t, `{"fields": [{"source-ids": [1], "name": "id_b", "transform": "bucket[4]"}]}`),
 			want: "add-spec;set-default-spec(-1);",
 		},
+		"unchanged by source name": {
+			plan: specObjectByName(t, "ts", "ts_day", "day"),
+			want: "",
+		},
+		"genuinely new spec by source name": {
+			plan: specObjectByName(t, "id", "id_b", "bucket[4]"),
+			want: "add-spec;set-default-spec(-1);",
+		},
 	}
 
 	for name, tc := range cases {
@@ -1553,6 +1605,18 @@ func TestCalculateSortOrderUpdatesReusesExistingOrder(t *testing.T) {
 		},
 		"genuinely new order": {
 			plan: sortObject(t, `{"fields": [{"source-id": 2, "transform": "identity", "direction": "asc", "null-order": "nulls-first"}]}`),
+			want: "add-sort-order;set-default-sort-order(-1);",
+		},
+		"unchanged by source name": {
+			plan: sortObjectByName(t, "id", "desc", "nulls-last"),
+			want: "",
+		},
+		"revert to order 1 by source name": {
+			plan: sortObjectByName(t, "id", "asc", "nulls-first"),
+			want: "set-default-sort-order(1);",
+		},
+		"genuinely new order by source name": {
+			plan: sortObjectByName(t, "ts", "asc", "nulls-first"),
 			want: "add-sort-order;set-default-sort-order(-1);",
 		},
 	}
