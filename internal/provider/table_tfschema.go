@@ -16,8 +16,11 @@
 package provider
 
 import (
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	dschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	rscschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -331,9 +334,20 @@ func tableSchemaFieldDataSourceAttributes(depth int) map[string]dschema.Attribut
 func tablePartitionSpecFieldResourceAttributes() map[string]rscschema.Attribute {
 	return map[string]rscschema.Attribute{
 		"source_ids": rscschema.ListAttribute{
-			Description: "The source field IDs.",
-			Required:    true,
+			Description: "The source field IDs. Set exactly one of source_ids or source_names; the other is computed.",
+			Optional:    true,
+			Computed:    true,
 			ElementType: types.Int64Type,
+			// Covers source_names too: one validator per pair avoids a duplicate diagnostic.
+			Validators: []validator.List{
+				listvalidator.ExactlyOneOf(path.MatchRelative().AtParent().AtName("source_names")),
+			},
+		},
+		"source_names": rscschema.ListAttribute{
+			Description: "The source column names, resolved to source_ids at apply time. Nested struct fields use their full dotted name (e.g. 'location.lat'). Set exactly one of source_ids or source_names; the other is computed.",
+			Optional:    true,
+			Computed:    true,
+			ElementType: types.StringType,
 		},
 		"field_id": rscschema.Int64Attribute{
 			Description: "The partition field ID.",
@@ -358,6 +372,11 @@ func tablePartitionSpecFieldDataSourceAttributes() map[string]dschema.Attribute 
 			Computed:    true,
 			ElementType: types.Int64Type,
 		},
+		"source_names": dschema.ListAttribute{
+			Description: "The source column names. Null if a source field is not in the current schema.",
+			Computed:    true,
+			ElementType: types.StringType,
+		},
 		"field_id": dschema.Int64Attribute{
 			Description: "The partition field ID.",
 			Computed:    true,
@@ -376,8 +395,18 @@ func tablePartitionSpecFieldDataSourceAttributes() map[string]dschema.Attribute 
 func tableSortOrderFieldResourceAttributes() map[string]rscschema.Attribute {
 	return map[string]rscschema.Attribute{
 		"source_id": rscschema.Int64Attribute{
-			Description: "The source field ID.",
-			Required:    true,
+			Description: "The source field ID. Set exactly one of source_id or source_name; the other is computed.",
+			Optional:    true,
+			Computed:    true,
+			// Covers source_name too: one validator per pair avoids a duplicate diagnostic.
+			Validators: []validator.Int64{
+				int64validator.ExactlyOneOf(path.MatchRelative().AtParent().AtName("source_name")),
+			},
+		},
+		"source_name": rscschema.StringAttribute{
+			Description: "The source column name, resolved to source_id at apply time. Nested struct fields use their full dotted name (e.g. 'location.lat'). Set exactly one of source_id or source_name; the other is computed.",
+			Optional:    true,
+			Computed:    true,
 		},
 		"transform": rscschema.StringAttribute{
 			Description: "The sort transform.",
@@ -404,6 +433,10 @@ func tableSortOrderFieldDataSourceAttributes() map[string]dschema.Attribute {
 	return map[string]dschema.Attribute{
 		"source_id": dschema.Int64Attribute{
 			Description: "The source field ID.",
+			Computed:    true,
+		},
+		"source_name": dschema.StringAttribute{
+			Description: "The source column name. Null if the source field is not in the current schema.",
 			Computed:    true,
 		},
 		"transform": dschema.StringAttribute{
