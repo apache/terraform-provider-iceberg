@@ -476,6 +476,24 @@ func TestPreserveIdentifierFields(t *testing.T) {
 		}
 	})
 
+	t.Run("preserved identifier rejected when field becomes optional", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFields: types.SetNull(types.StringType),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: false},
+			},
+		}
+		plan.preserveIdentifierFields(current)
+		icebergPlan, err := plan.ToIceberg()
+		if err != nil {
+			t.Fatalf("ToIceberg: %v", err)
+		}
+		err = validateIdentifierFields(icebergPlan)
+		if err == nil || !strings.Contains(err.Error(), "not a required field") {
+			t.Fatalf("expected required-field error after preserve, got %v", err)
+		}
+	})
+
 	t.Run("dropped identifier column is not preserved", func(t *testing.T) {
 		plan := icebergTableSchema{
 			IdentifierFields: types.SetNull(types.StringType),
@@ -527,5 +545,53 @@ func TestValidateIdentifierFields(t *testing.T) {
 			t.Fatalf("expected float error, got %v", err)
 		}
 	})
+
+	t.Run("struct field rejected", func(t *testing.T) {
+		schema := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+			iceberg.NestedField{ID: 1, Name: "data", Type: structOf(iceberg.PrimitiveTypes.String), Required: true},
+		)
+		err := validateIdentifierFields(schema)
+		if err == nil || !strings.Contains(err.Error(), "not a primitive type field") {
+			t.Fatalf("expected non-primitive error, got %v", err)
+		}
+	})
+
+	t.Run("nested under optional struct rejected", func(t *testing.T) {
+		schema := iceberg.NewSchema(0,
+			iceberg.NestedField{
+				ID:   1,
+				Name: "user",
+				Type: &iceberg.StructType{FieldList: []iceberg.NestedField{
+					{ID: 2, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+				}},
+				Required: false,
+			},
+		)
+		schema.IdentifierFieldIDs = []int{2}
+		err := validateIdentifierFields(schema)
+		if err == nil || !strings.Contains(err.Error(), "optional field") {
+			t.Fatalf("expected optional-parent error, got %v", err)
+		}
+	})
+}
+
+func TestStringSetElementsRejectsNullElement(t *testing.T) {
+	set := types.SetValueMust(types.StringType, []attr.Value{
+		types.StringValue("id"),
+		types.StringNull(),
+	})
+	_, err := stringSetElements(set)
+	if err == nil {
+		t.Fatal("expected error for null set element")
+	}
+}
+
+func TestIdentifierFieldIDsEqual(t *testing.T) {
+	if !identifierFieldIDsEqual([]int{1, 2}, []int{2, 1}) {
+		t.Fatal("expected order-independent equality")
+	}
+	if identifierFieldIDsEqual([]int{1}, []int{1, 2}) {
+		t.Fatal("expected unequal lengths")
+	}
 }
 
