@@ -58,6 +58,7 @@ resource "iceberg_table" "example" {
   name      = "example_table"
 
   schema = {
+    identifier_fields = ["id"]
     fields = [
       {
         name     = "id"
@@ -82,6 +83,18 @@ resource "iceberg_table" "example" {
   }
 }
 ```
+
+## Identifier fields
+
+`schema.identifier_fields` is a set of field names that identify a row (Iceberg's
+`identifier-field-ids`). Nested struct fields use dotted paths such as
+`"user.id"`. Each named field must exist, be a required primitive (not
+`float`/`double`), and must not nest under a list, map, or optional struct.
+
+When the attribute is omitted from a plan, the provider preserves the table's
+current identifiers (remapping by field ID across renames). An explicit empty
+set clears them. Dropping an identifier column without listing it again also
+removes it from the preserved set.
 
 ## Renaming columns
 
@@ -135,6 +148,7 @@ Required:
 Optional:
 
 - `id` (Number) The schema ID.
+- `identifier_fields` (Set of String) Field names that identify a row (Iceberg identifier-field-ids). Use dotted paths for nested struct fields (e.g. `"user.id"`). Fields must exist, be required primitives (not float/double), and not nest under lists, maps, or optional structs. Omitted values are preserved across unrelated schema updates; an explicit empty set clears them.
 
 <a id="nestedatt--schema--fields"></a>
 ### Nested Schema for `schema.fields`

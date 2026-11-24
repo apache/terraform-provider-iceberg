@@ -374,7 +374,7 @@ func TestValidateNewFieldIDs(t *testing.T) {
 	}
 }
 
-func TestSchemaIdentifierFieldIDsRoundTrip(t *testing.T) {
+func TestSchemaIdentifierFieldsRoundTrip(t *testing.T) {
 	icebergSchema := iceberg.NewSchemaWithIdentifiers(0, []int{1},
 		iceberg.NestedField{ID: 1, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: true},
 		iceberg.NestedField{ID: 2, Name: "data", Type: iceberg.PrimitiveTypes.String, Required: false},
@@ -385,12 +385,12 @@ func TestSchemaIdentifierFieldIDsRoundTrip(t *testing.T) {
 		t.Fatalf("FromIceberg: %v", err)
 	}
 
-	ids, err := int64ListElements(tfSchema.IdentifierFieldIDs)
+	names, err := stringSetElements(tfSchema.IdentifierFields)
 	if err != nil {
-		t.Fatalf("int64ListElements: %v", err)
+		t.Fatalf("stringSetElements: %v", err)
 	}
-	if len(ids) != 1 || ids[0] != 1 {
-		t.Fatalf("expected identifier_field_ids [1], got %v", ids)
+	if len(names) != 1 || names[0] != "id" {
+		t.Fatalf("expected identifier_fields [id], got %v", names)
 	}
 
 	roundTripped, err := tfSchema.ToIceberg()
@@ -402,60 +402,129 @@ func TestSchemaIdentifierFieldIDsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPreserveIdentifierFieldIDs(t *testing.T) {
+func TestPreserveIdentifierFields(t *testing.T) {
 	current := iceberg.NewSchemaWithIdentifiers(0, []int{1},
 		iceberg.NestedField{ID: 1, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: true},
 	)
 
 	t.Run("omitted plan preserves current", func(t *testing.T) {
 		plan := icebergTableSchema{
-			IdentifierFieldIDs: types.ListNull(types.Int64Type),
+			IdentifierFields: types.SetNull(types.StringType),
 			Fields: []icebergTableSchemaField{
 				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
 			},
 		}
-		plan.preserveIdentifierFieldIDs(current)
-		ids, err := int64ListElements(plan.IdentifierFieldIDs)
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
 		if err != nil {
-			t.Fatalf("int64ListElements: %v", err)
+			t.Fatalf("stringSetElements: %v", err)
 		}
-		if len(ids) != 1 || ids[0] != 1 {
-			t.Fatalf("expected preserved [1], got %v", ids)
+		if len(names) != 1 || names[0] != "id" {
+			t.Fatalf("expected preserved [id], got %v", names)
 		}
 	})
 
-	t.Run("explicit empty list clears", func(t *testing.T) {
+	t.Run("explicit empty set clears", func(t *testing.T) {
 		plan := icebergTableSchema{
-			IdentifierFieldIDs: types.ListValueMust(types.Int64Type, []attr.Value{}),
+			IdentifierFields: types.SetValueMust(types.StringType, []attr.Value{}),
 			Fields: []icebergTableSchemaField{
 				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
 			},
 		}
-		plan.preserveIdentifierFieldIDs(current)
-		ids, err := int64ListElements(plan.IdentifierFieldIDs)
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
 		if err != nil {
-			t.Fatalf("int64ListElements: %v", err)
+			t.Fatalf("stringSetElements: %v", err)
 		}
-		if len(ids) != 0 {
-			t.Fatalf("expected cleared identifiers, got %v", ids)
+		if len(names) != 0 {
+			t.Fatalf("expected cleared identifiers, got %v", names)
 		}
 	})
 
-	t.Run("explicit plan list kept", func(t *testing.T) {
+	t.Run("explicit plan set kept", func(t *testing.T) {
 		plan := icebergTableSchema{
-			IdentifierFieldIDs: types.ListValueMust(types.Int64Type, []attr.Value{types.Int64Value(1)}),
+			IdentifierFields: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("id")}),
 			Fields: []icebergTableSchemaField{
 				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
 				{ID: types.Int64Value(2), Name: "data", Type: "string", Required: false},
 			},
 		}
-		plan.preserveIdentifierFieldIDs(current)
-		ids, err := int64ListElements(plan.IdentifierFieldIDs)
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
 		if err != nil {
-			t.Fatalf("int64ListElements: %v", err)
+			t.Fatalf("stringSetElements: %v", err)
 		}
-		if len(ids) != 1 || ids[0] != 1 {
-			t.Fatalf("expected plan [1], got %v", ids)
+		if len(names) != 1 || names[0] != "id" {
+			t.Fatalf("expected plan [id], got %v", names)
+		}
+	})
+
+	t.Run("rename remaps preserved identifier by id", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFields: types.SetNull(types.StringType),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "user_id", Type: "long", Required: true},
+			},
+		}
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
+		if err != nil {
+			t.Fatalf("stringSetElements: %v", err)
+		}
+		if len(names) != 1 || names[0] != "user_id" {
+			t.Fatalf("expected preserved rename [user_id], got %v", names)
+		}
+	})
+
+	t.Run("dropped identifier column is not preserved", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFields: types.SetNull(types.StringType),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(2), Name: "data", Type: "string", Required: false},
+			},
+		}
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
+		if err != nil {
+			t.Fatalf("stringSetElements: %v", err)
+		}
+		if len(names) != 0 {
+			t.Fatalf("expected no preserved identifiers after drop, got %v", names)
+		}
+	})
+}
+
+func TestValidateIdentifierFields(t *testing.T) {
+	t.Run("missing field", func(t *testing.T) {
+		s := icebergTableSchema{
+			IdentifierFields: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("missing")}),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
+			},
+		}
+		_, err := s.ToIceberg()
+		if err == nil || !strings.Contains(err.Error(), `identifier field "missing" does not exist`) {
+			t.Fatalf("expected missing-field error, got %v", err)
+		}
+	})
+
+	t.Run("optional field rejected", func(t *testing.T) {
+		schema := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+			iceberg.NestedField{ID: 1, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: false},
+		)
+		err := validateIdentifierFields(schema)
+		if err == nil || !strings.Contains(err.Error(), "not a required field") {
+			t.Fatalf("expected required-field error, got %v", err)
+		}
+	})
+
+	t.Run("float field rejected", func(t *testing.T) {
+		schema := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+			iceberg.NestedField{ID: 1, Name: "score", Type: iceberg.PrimitiveTypes.Float64, Required: true},
+		)
+		err := validateIdentifierFields(schema)
+		if err == nil || !strings.Contains(err.Error(), "must not be float or double") {
+			t.Fatalf("expected float error, got %v", err)
 		}
 	})
 }

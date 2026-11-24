@@ -215,6 +215,11 @@ func (r *icebergTableResource) Create(ctx context.Context, req resource.CreateRe
 
 		return
 	}
+	if err := validateIdentifierFields(tblSchema); err != nil {
+		resp.Diagnostics.AddError("invalid identifier fields", err.Error())
+
+		return
+	}
 
 	userProps := make(map[string]string)
 	if !data.UserProperties.IsNull() && !data.UserProperties.IsUnknown() {
@@ -472,13 +477,18 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
-	// Keep identifier-field-ids when the plan omits them so unrelated field
+	// Keep identifier fields when the plan omits them so unrelated field
 	// changes do not silently clear row-identity metadata.
-	planSchema.preserveIdentifierFieldIDs(tbl.Schema())
+	planSchema.preserveIdentifierFields(tbl.Schema())
 
 	planIceberg, err := planSchema.ToIceberg()
 	if err != nil {
 		diags.AddError("failed to convert plan schema", err.Error())
+
+		return nil
+	}
+	if err := validateIdentifierFields(planIceberg); err != nil {
+		diags.AddError("invalid identifier fields", err.Error())
 
 		return nil
 	}
@@ -492,11 +502,8 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 	// Compare fields and identifier-field-ids. Ignore top-level schema-id.
 	planFieldsJson, _ := json.Marshal(planIceberg.Fields())
 	stateFieldsJson, _ := json.Marshal(stateIceberg.Fields())
-	planIdentJson, _ := json.Marshal(planIceberg.IdentifierFieldIDs)
-	stateIdentJson, _ := json.Marshal(stateIceberg.IdentifierFieldIDs)
-
 	if string(planFieldsJson) == string(stateFieldsJson) &&
-		string(planIdentJson) == string(stateIdentJson) {
+		identifierFieldIDsEqual(planIceberg.IdentifierFieldIDs, stateIceberg.IdentifierFieldIDs) {
 		return nil
 	}
 
