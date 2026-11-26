@@ -1250,6 +1250,107 @@ resource "iceberg_table" "test" {
 `, tableName, extraField, partitionSpec, sortDirection)
 }
 
+func TestAccIcebergTableTypeWhitespace(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_CATALOG_URI")
+	if catalogURI == "" {
+		catalogURI = "http://localhost:8181"
+	}
+
+	providerCfg := fmt.Sprintf(providerConfig, catalogURI)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccIcebergTableTypeWhitespaceConfig(providerCfg, "decimal(10, 2)", "decimal(10,2)"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.type", "decimal(10, 2)"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.1.list_properties.element_type", "decimal(10,2)"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.2.map_properties.key_type", "decimal(10,2)"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.2.map_properties.value_type", "decimal(10,2)"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.3.struct_properties.fields.0.type", "decimal(10, 2)"),
+				),
+			},
+			{
+				Config:   testAccIcebergTableTypeWhitespaceConfig(providerCfg, "decimal(10, 2)", "decimal(10,2)"),
+				PlanOnly: true,
+			},
+			{
+				// Swap the spacing on every field. Nothing changes in the catalog.
+				Config: testAccIcebergTableTypeWhitespaceConfig(providerCfg, "decimal(10,2)", "decimal(10, 2)"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "0"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.type", "decimal(10,2)"),
+				),
+			},
+			{
+				// A real type change still goes through.
+				Config: testAccIcebergTableTypeWhitespaceConfig(providerCfg, "decimal(12, 2)", "decimal(10, 2)"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.id", "1"),
+					resource.TestCheckResourceAttr("iceberg_table.test", "schema.fields.0.type", "decimal(12, 2)"),
+				),
+			},
+		},
+	})
+}
+
+func testAccIcebergTableTypeWhitespaceConfig(providerCfg, fieldType, nestedType string) string {
+	return providerCfg + fmt.Sprintf(`
+resource "iceberg_namespace" "db_type_ws" {
+  name = ["db_type_ws"]
+}
+
+resource "iceberg_table" "test" {
+  namespace = iceberg_namespace.db_type_ws.name
+  name      = "type_ws_test"
+  schema = {
+    fields = [
+      {
+        name     = "amount"
+        type     = "%[1]s"
+        required = false
+      },
+      {
+        name     = "amounts"
+        type     = "list"
+        required = false
+        list_properties = {
+          element_type     = "%[2]s"
+          element_required = false
+        }
+      },
+      {
+        name     = "by_currency"
+        type     = "map"
+        required = false
+        map_properties = {
+          key_type       = "%[2]s"
+          value_type     = "%[2]s"
+          value_required = false
+        }
+      },
+      {
+        name     = "totals"
+        type     = "struct"
+        required = false
+        struct_properties = {
+          fields = [
+            {
+              name     = "net"
+              type     = "%[1]s"
+              required = false
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+`, fieldType, nestedType)
+}
+
 // historyMetadata is a table whose current schema, spec, and sort order are
 // the last of several, so the earlier ones can be returned to.
 const historyMetadata = `{

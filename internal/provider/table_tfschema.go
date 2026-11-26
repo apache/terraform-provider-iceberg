@@ -134,6 +134,7 @@ func tableSchemaFieldResourceAttributes(depth int) map[string]rscschema.Attribut
 			Required:    true,
 		},
 		"type": rscschema.StringAttribute{
+			CustomType:  fieldTypeStringType{},
 			Description: "The field type (e.g., 'int', 'string', 'decimal(10,2)', 'struct'). For struct, use struct_properties.",
 			Required:    true,
 		},
@@ -155,6 +156,7 @@ func tableSchemaFieldResourceAttributes(depth int) map[string]rscschema.Attribut
 					Computed:    true,
 				},
 				"element_type": rscschema.StringAttribute{
+					CustomType:  fieldTypeStringType{},
 					Description: "The list element type.",
 					Required:    true,
 				},
@@ -174,6 +176,7 @@ func tableSchemaFieldResourceAttributes(depth int) map[string]rscschema.Attribut
 					Computed:    true,
 				},
 				"key_type": rscschema.StringAttribute{
+					CustomType:  fieldTypeStringType{},
 					Description: "The map key type.",
 					Required:    true,
 				},
@@ -183,6 +186,7 @@ func tableSchemaFieldResourceAttributes(depth int) map[string]rscschema.Attribut
 					Computed:    true,
 				},
 				"value_type": rscschema.StringAttribute{
+					CustomType:  fieldTypeStringType{},
 					Description: "The map value type.",
 					Required:    true,
 				},
@@ -238,6 +242,7 @@ func tableSchemaFieldDataSourceAttributes(depth int) map[string]dschema.Attribut
 			Computed:    true,
 		},
 		"type": dschema.StringAttribute{
+			CustomType:  fieldTypeStringType{},
 			Description: "The field type (e.g., 'int', 'string', 'decimal(10,2)', 'struct'). For struct, use struct_properties.",
 			Computed:    true,
 		},
@@ -258,6 +263,7 @@ func tableSchemaFieldDataSourceAttributes(depth int) map[string]dschema.Attribut
 					Computed:    true,
 				},
 				"element_type": dschema.StringAttribute{
+					CustomType:  fieldTypeStringType{},
 					Description: "The list element type.",
 					Computed:    true,
 				},
@@ -276,6 +282,7 @@ func tableSchemaFieldDataSourceAttributes(depth int) map[string]dschema.Attribut
 					Computed:    true,
 				},
 				"key_type": dschema.StringAttribute{
+					CustomType:  fieldTypeStringType{},
 					Description: "The map key type.",
 					Computed:    true,
 				},
@@ -284,6 +291,7 @@ func tableSchemaFieldDataSourceAttributes(depth int) map[string]dschema.Attribut
 					Computed:    true,
 				},
 				"value_type": dschema.StringAttribute{
+					CustomType:  fieldTypeStringType{},
 					Description: "The map value type.",
 					Computed:    true,
 				},

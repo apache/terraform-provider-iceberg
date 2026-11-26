@@ -636,7 +636,7 @@ func (icebergTableSchemaField) AttrTypes(depth int) map[string]attr.Type {
 	res := map[string]attr.Type{
 		"id":              types.Int64Type,
 		"name":            types.StringType,
-		"type":            types.StringType,
+		"type":            fieldTypeStringType{},
 		"required":        types.BoolType,
 		"doc":             types.StringType,
 		"list_properties": types.ObjectType{AttrTypes: icebergTableSchemaFieldListProperties{}.AttrTypes()},
@@ -672,7 +672,7 @@ type icebergTableSchemaFieldListProperties struct {
 func (icebergTableSchemaFieldListProperties) AttrTypes() map[string]attr.Type {
 	return map[string]attr.Type{
 		"element_id":       types.Int64Type,
-		"element_type":     types.StringType,
+		"element_type":     fieldTypeStringType{},
 		"element_required": types.BoolType,
 	}
 }
@@ -723,9 +723,9 @@ type icebergTableSchemaFieldMapProperties struct {
 func (icebergTableSchemaFieldMapProperties) AttrTypes() map[string]attr.Type {
 	return map[string]attr.Type{
 		"key_id":         types.Int64Type,
-		"key_type":       types.StringType,
+		"key_type":       fieldTypeStringType{},
 		"value_id":       types.Int64Type,
-		"value_type":     types.StringType,
+		"value_type":     fieldTypeStringType{},
 		"value_required": types.BoolType,
 	}
 }
