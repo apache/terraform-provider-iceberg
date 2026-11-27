@@ -32,6 +32,12 @@ func tableSchemaResourceAttributes() map[string]rscschema.Attribute {
 			Optional:    true,
 			Computed:    true,
 		},
+		"identifier_fields": rscschema.SetAttribute{
+			Description: "Field names that identify a row (Iceberg identifier-field-ids). Use dotted paths for nested struct fields (e.g. \"user.id\"). Fields must exist, be required primitives (not float/double), and not nest under lists, maps, or optional structs. Omitted values are preserved across unrelated schema updates; an explicit empty set clears them.",
+			ElementType: types.StringType,
+			Optional:    true,
+			Computed:    true,
+		},
 		"fields": rscschema.ListNestedAttribute{
 			Description: "The fields of the schema",
 			Required:    true,
@@ -46,6 +52,11 @@ func tableSchemaDataSourceAttributes() map[string]dschema.Attribute {
 	return map[string]dschema.Attribute{
 		"id": dschema.Int64Attribute{
 			Description: "The schema ID.",
+			Computed:    true,
+		},
+		"identifier_fields": dschema.SetAttribute{
+			Description: "Field names that identify a row (Iceberg identifier-field-ids). Nested struct fields use dotted paths (e.g. \"user.id\").",
+			ElementType: types.StringType,
 			Computed:    true,
 		},
 		"fields": dschema.ListNestedAttribute{

@@ -23,6 +23,7 @@ import (
 
 	"github.com/apache/iceberg-go"
 	"github.com/apache/iceberg-go/table"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -370,5 +371,230 @@ func TestValidateNewFieldIDs(t *testing.T) {
 				t.Errorf("expected error containing %q, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestSchemaIdentifierFieldsRoundTrip(t *testing.T) {
+	icebergSchema := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+		iceberg.NestedField{ID: 1, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		iceberg.NestedField{ID: 2, Name: "data", Type: iceberg.PrimitiveTypes.String, Required: false},
+	)
+
+	var tfSchema icebergTableSchema
+	if err := tfSchema.FromIceberg(icebergSchema); err != nil {
+		t.Fatalf("FromIceberg: %v", err)
+	}
+
+	names, err := stringSetElements(tfSchema.IdentifierFields)
+	if err != nil {
+		t.Fatalf("stringSetElements: %v", err)
+	}
+	if len(names) != 1 || names[0] != "id" {
+		t.Fatalf("expected identifier_fields [id], got %v", names)
+	}
+
+	roundTripped, err := tfSchema.ToIceberg()
+	if err != nil {
+		t.Fatalf("ToIceberg: %v", err)
+	}
+	if len(roundTripped.IdentifierFieldIDs) != 1 || roundTripped.IdentifierFieldIDs[0] != 1 {
+		t.Fatalf("expected round-trip identifier-field-ids [1], got %v", roundTripped.IdentifierFieldIDs)
+	}
+}
+
+func TestPreserveIdentifierFields(t *testing.T) {
+	current := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+		iceberg.NestedField{ID: 1, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+	)
+
+	t.Run("omitted plan preserves current", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFields: types.SetNull(types.StringType),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
+			},
+		}
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
+		if err != nil {
+			t.Fatalf("stringSetElements: %v", err)
+		}
+		if len(names) != 1 || names[0] != "id" {
+			t.Fatalf("expected preserved [id], got %v", names)
+		}
+	})
+
+	t.Run("explicit empty set clears", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFields: types.SetValueMust(types.StringType, []attr.Value{}),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
+			},
+		}
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
+		if err != nil {
+			t.Fatalf("stringSetElements: %v", err)
+		}
+		if len(names) != 0 {
+			t.Fatalf("expected cleared identifiers, got %v", names)
+		}
+	})
+
+	t.Run("explicit plan set kept", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFields: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("id")}),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
+				{ID: types.Int64Value(2), Name: "data", Type: "string", Required: false},
+			},
+		}
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
+		if err != nil {
+			t.Fatalf("stringSetElements: %v", err)
+		}
+		if len(names) != 1 || names[0] != "id" {
+			t.Fatalf("expected plan [id], got %v", names)
+		}
+	})
+
+	t.Run("rename remaps preserved identifier by id", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFields: types.SetNull(types.StringType),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "user_id", Type: "long", Required: true},
+			},
+		}
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
+		if err != nil {
+			t.Fatalf("stringSetElements: %v", err)
+		}
+		if len(names) != 1 || names[0] != "user_id" {
+			t.Fatalf("expected preserved rename [user_id], got %v", names)
+		}
+	})
+
+	t.Run("preserved identifier rejected when field becomes optional", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFields: types.SetNull(types.StringType),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: false},
+			},
+		}
+		plan.preserveIdentifierFields(current)
+		icebergPlan, err := plan.ToIceberg()
+		if err != nil {
+			t.Fatalf("ToIceberg: %v", err)
+		}
+		err = validateIdentifierFields(icebergPlan)
+		if err == nil || !strings.Contains(err.Error(), "not a required field") {
+			t.Fatalf("expected required-field error after preserve, got %v", err)
+		}
+	})
+
+	t.Run("dropped identifier column errors on convert", func(t *testing.T) {
+		plan := icebergTableSchema{
+			IdentifierFields: types.SetNull(types.StringType),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(2), Name: "data", Type: "string", Required: false},
+			},
+		}
+		plan.preserveIdentifierFields(current)
+		names, err := stringSetElements(plan.IdentifierFields)
+		if err != nil {
+			t.Fatalf("stringSetElements: %v", err)
+		}
+		if len(names) != 1 || names[0] != "id" {
+			t.Fatalf("expected preserved dropped identifier name [id], got %v", names)
+		}
+		_, err = plan.ToIceberg()
+		if err == nil || !strings.Contains(err.Error(), `identifier field "id" does not exist`) {
+			t.Fatalf("expected missing identifier field error, got %v", err)
+		}
+	})
+}
+
+func TestValidateIdentifierFields(t *testing.T) {
+	t.Run("missing field", func(t *testing.T) {
+		s := icebergTableSchema{
+			IdentifierFields: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("missing")}),
+			Fields: []icebergTableSchemaField{
+				{ID: types.Int64Value(1), Name: "id", Type: "long", Required: true},
+			},
+		}
+		_, err := s.ToIceberg()
+		if err == nil || !strings.Contains(err.Error(), `identifier field "missing" does not exist`) {
+			t.Fatalf("expected missing-field error, got %v", err)
+		}
+	})
+
+	t.Run("optional field rejected", func(t *testing.T) {
+		schema := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+			iceberg.NestedField{ID: 1, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: false},
+		)
+		err := validateIdentifierFields(schema)
+		if err == nil || !strings.Contains(err.Error(), "not a required field") {
+			t.Fatalf("expected required-field error, got %v", err)
+		}
+	})
+
+	t.Run("float field rejected", func(t *testing.T) {
+		schema := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+			iceberg.NestedField{ID: 1, Name: "score", Type: iceberg.PrimitiveTypes.Float64, Required: true},
+		)
+		err := validateIdentifierFields(schema)
+		if err == nil || !strings.Contains(err.Error(), "must not be float or double") {
+			t.Fatalf("expected float error, got %v", err)
+		}
+	})
+
+	t.Run("struct field rejected", func(t *testing.T) {
+		schema := iceberg.NewSchemaWithIdentifiers(0, []int{1},
+			iceberg.NestedField{ID: 1, Name: "data", Type: structOf(iceberg.PrimitiveTypes.String), Required: true},
+		)
+		err := validateIdentifierFields(schema)
+		if err == nil || !strings.Contains(err.Error(), "not a primitive type field") {
+			t.Fatalf("expected non-primitive error, got %v", err)
+		}
+	})
+
+	t.Run("nested under optional struct rejected", func(t *testing.T) {
+		schema := iceberg.NewSchema(0,
+			iceberg.NestedField{
+				ID:   1,
+				Name: "user",
+				Type: &iceberg.StructType{FieldList: []iceberg.NestedField{
+					{ID: 2, Name: "id", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+				}},
+				Required: false,
+			},
+		)
+		schema.IdentifierFieldIDs = []int{2}
+		err := validateIdentifierFields(schema)
+		if err == nil || !strings.Contains(err.Error(), "optional field") {
+			t.Fatalf("expected optional-parent error, got %v", err)
+		}
+	})
+}
+
+func TestStringSetElementsRejectsNullElement(t *testing.T) {
+	set := types.SetValueMust(types.StringType, []attr.Value{
+		types.StringValue("id"),
+		types.StringNull(),
+	})
+	_, err := stringSetElements(set)
+	if err == nil {
+		t.Fatal("expected error for null set element")
+	}
+}
+
+func TestIdentifierFieldIDsEqual(t *testing.T) {
+	if !identifierFieldIDsEqual([]int{1, 2}, []int{2, 1}) {
+		t.Fatal("expected order-independent equality")
+	}
+	if identifierFieldIDsEqual([]int{1}, []int{1, 2}) {
+		t.Fatal("expected unequal lengths")
 	}
 }

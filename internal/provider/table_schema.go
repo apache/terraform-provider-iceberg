@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/apache/iceberg-go"
@@ -29,13 +30,15 @@ import (
 )
 
 type icebergTableSchema struct {
-	ID     types.Int64               `tfsdk:"id" json:"schema-id"`
-	Fields []icebergTableSchemaField `tfsdk:"fields" json:"fields"`
+	ID               types.Int64               `tfsdk:"id" json:"schema-id"`
+	IdentifierFields types.Set                 `tfsdk:"identifier_fields"`
+	Fields           []icebergTableSchemaField `tfsdk:"fields" json:"fields"`
 }
 
 func (s icebergTableSchema) AttrTypes() map[string]attr.Type {
 	return map[string]attr.Type{
-		"id": types.Int64Type,
+		"id":                types.Int64Type,
+		"identifier_fields": types.SetType{ElemType: types.StringType},
 		"fields": types.ListType{
 			ElemType: types.ObjectType{
 				AttrTypes: icebergTableSchemaField{}.AttrTypes(4),
@@ -46,13 +49,19 @@ func (s icebergTableSchema) AttrTypes() map[string]attr.Type {
 
 func (s icebergTableSchema) MarshalJSON() ([]byte, error) {
 	type Alias struct {
-		ID     *int64                    `json:"schema-id,omitempty"`
-		Fields []icebergTableSchemaField `json:"fields"`
+		ID                 *int64                    `json:"schema-id,omitempty"`
+		IdentifierFieldIDs []int64                   `json:"identifier-field-ids,omitempty"`
+		Fields             []icebergTableSchemaField `json:"fields"`
 	}
 	var id *int64
 	if !s.ID.IsNull() && !s.ID.IsUnknown() {
 		val := s.ID.ValueInt64()
 		id = &val
+	}
+
+	ids, err := s.resolveIdentifierFieldIDs()
+	if err != nil {
+		return nil, err
 	}
 
 	return json.Marshal(&struct {
@@ -61,16 +70,18 @@ func (s icebergTableSchema) MarshalJSON() ([]byte, error) {
 	}{
 		Type: "struct",
 		Alias: Alias{
-			ID:     id,
-			Fields: s.Fields,
+			ID:                 id,
+			IdentifierFieldIDs: ids,
+			Fields:             s.Fields,
 		},
 	})
 }
 
 func (s *icebergTableSchema) UnmarshalJSON(b []byte) error {
 	type Alias struct {
-		ID     int64                     `json:"schema-id"`
-		Fields []icebergTableSchemaField `json:"fields"`
+		ID                 int64                     `json:"schema-id"`
+		IdentifierFieldIDs []int64                   `json:"identifier-field-ids"`
+		Fields             []icebergTableSchemaField `json:"fields"`
 	}
 	var raw Alias
 	if err := json.Unmarshal(b, &raw); err != nil {
@@ -79,7 +90,224 @@ func (s *icebergTableSchema) UnmarshalJSON(b []byte) error {
 	s.ID = types.Int64Value(raw.ID)
 	s.Fields = raw.Fields
 
+	// Represent "no identifiers" as an empty set so create/read/import
+	// round-trip consistently (null means "omitted from config").
+	namesByID := fieldNamesByID(raw.Fields, "")
+	elems := make([]attr.Value, 0, len(raw.IdentifierFieldIDs))
+	for _, id := range raw.IdentifierFieldIDs {
+		name, ok := namesByID[id]
+		if !ok {
+			return fmt.Errorf("identifier field id %d not found in schema fields", id)
+		}
+		elems = append(elems, types.StringValue(name))
+	}
+	s.IdentifierFields = types.SetValueMust(types.StringType, elems)
+
 	return nil
+}
+
+// stringSetElements returns the string elements of a Terraform set, or nil when
+// the set is null/unknown (including an unset optional attribute).
+func stringSetElements(set types.Set) ([]string, error) {
+	if set.IsNull() || set.IsUnknown() {
+		return nil, nil
+	}
+	elems := set.Elements()
+	out := make([]string, 0, len(elems))
+	for _, elem := range elems {
+		v, ok := elem.(types.String)
+		if !ok {
+			return nil, fmt.Errorf("expected string set element, got %T", elem)
+		}
+		if v.IsNull() || v.IsUnknown() {
+			return nil, fmt.Errorf("set contains null or unknown element")
+		}
+		out = append(out, v.ValueString())
+	}
+
+	return out, nil
+}
+
+// fieldNamesByID maps field IDs to dotted paths (e.g. "user.id") for nested structs.
+func fieldNamesByID(fields []icebergTableSchemaField, prefix string) map[int64]string {
+	out := map[int64]string{}
+	for _, f := range fields {
+		name := f.Name
+		if prefix != "" {
+			name = prefix + "." + f.Name
+		}
+		if !fieldIDUnset(f.ID) {
+			out[f.ID.ValueInt64()] = name
+		}
+		if f.StructProperties != nil {
+			for id, nested := range fieldNamesByID(f.StructProperties.Fields, name) {
+				out[id] = nested
+			}
+		}
+	}
+
+	return out
+}
+
+// fieldIDsByName maps dotted field paths to IDs.
+func fieldIDsByName(fields []icebergTableSchemaField, prefix string) map[string]int64 {
+	out := map[string]int64{}
+	for _, f := range fields {
+		name := f.Name
+		if prefix != "" {
+			name = prefix + "." + f.Name
+		}
+		if !fieldIDUnset(f.ID) {
+			out[name] = f.ID.ValueInt64()
+		}
+		if f.StructProperties != nil {
+			for nested, id := range fieldIDsByName(f.StructProperties.Fields, name) {
+				out[nested] = id
+			}
+		}
+	}
+
+	return out
+}
+
+// resolveIdentifierFieldIDs converts configured identifier field names to sorted
+// Iceberg field IDs. Null/unknown means omitted (nil); an empty set clears.
+func (s icebergTableSchema) resolveIdentifierFieldIDs() ([]int64, error) {
+	names, err := stringSetElements(s.IdentifierFields)
+	if err != nil {
+		return nil, err
+	}
+	if names == nil {
+		return nil, nil
+	}
+	byName := fieldIDsByName(s.Fields, "")
+	ids := make([]int64, 0, len(names))
+	for _, name := range names {
+		id, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("identifier field %q does not exist", name)
+		}
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	return ids, nil
+}
+
+// preserveIdentifierFields copies identifier fields from the current table when
+// the plan omits them (null/unknown). Current IDs are remapped to names in the
+// plan schema so renames keep identity. Dropped columns keep the current table
+// name so ToIceberg/validateIdentifierFields reject the update instead of
+// silently clearing row identity.
+// An explicit empty set clears identifiers; a non-empty plan set is unchanged.
+func (s *icebergTableSchema) preserveIdentifierFields(current *iceberg.Schema) {
+	if !s.IdentifierFields.IsNull() && !s.IdentifierFields.IsUnknown() {
+		return
+	}
+	if current == nil || len(current.IdentifierFieldIDs) == 0 {
+		s.IdentifierFields = types.SetValueMust(types.StringType, []attr.Value{})
+
+		return
+	}
+	namesByID := fieldNamesByID(s.Fields, "")
+	elems := make([]attr.Value, 0, len(current.IdentifierFieldIDs))
+	for _, id := range current.IdentifierFieldIDs {
+		name, ok := namesByID[int64(id)]
+		if !ok {
+			colName, found := current.FindColumnName(id)
+			if !found {
+				continue
+			}
+			name = colName
+		}
+		elems = append(elems, types.StringValue(name))
+	}
+	s.IdentifierFields = types.SetValueMust(types.StringType, elems)
+}
+
+// validateIdentifierFields enforces Iceberg identifier-field rules against a
+// converted schema: each ID must exist, be a required non-float primitive, and
+// must not nest under a list, map, or optional struct.
+func validateIdentifierFields(schema *iceberg.Schema) error {
+	if schema == nil || len(schema.IdentifierFieldIDs) == 0 {
+		return nil
+	}
+	for _, id := range schema.IdentifierFieldIDs {
+		field, ok := schema.FindFieldByID(id)
+		if !ok {
+			return fmt.Errorf("identifier field id %d does not exist", id)
+		}
+		name, _ := schema.FindColumnName(id)
+		if name == "" {
+			name = field.Name
+		}
+		if !field.Required {
+			return fmt.Errorf("cannot use field %q as an identifier field: not a required field", name)
+		}
+		prim, isPrim := field.Type.(iceberg.PrimitiveType)
+		if !isPrim {
+			return fmt.Errorf("cannot use field %q as an identifier field: not a primitive type field", name)
+		}
+		if prim.Equals(iceberg.PrimitiveTypes.Float32) || prim.Equals(iceberg.PrimitiveTypes.Float64) {
+			return fmt.Errorf("cannot use field %q as an identifier field: must not be float or double", name)
+		}
+		if err := validateIdentifierParentChain(schema, id, name); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateIdentifierParentChain(schema *iceberg.Schema, id int, name string) error {
+	// Walk ancestors via Iceberg's parent index: every parent must be a required
+	// struct (rejects list/map nesting and optional struct parents).
+	idToParent, err := iceberg.IndexParents(schema)
+	if err != nil {
+		return err
+	}
+	idToField, err := iceberg.IndexByID(schema)
+	if err != nil {
+		return err
+	}
+	parentID, ok := idToParent[id]
+	for ok {
+		parent, found := idToField[parentID]
+		if !found {
+			return fmt.Errorf("cannot use field %q as an identifier field: parent id %d not found", name, parentID)
+		}
+		if _, isStruct := parent.Type.(*iceberg.StructType); !isStruct {
+			return fmt.Errorf("cannot use field %q as an identifier field: must not be nested in %s", name, parent.Type.Type())
+		}
+		if !parent.Required {
+			return fmt.Errorf("cannot use field %q as an identifier field: must not be nested in an optional field %q", name, parent.Name)
+		}
+		parentID, ok = idToParent[parent.ID]
+	}
+
+	return nil
+}
+
+// identifierFieldIDsEqual reports whether two identifier-field-id slices name the
+// same fields, independent of element order.
+func identifierFieldIDsEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	ac := append([]int(nil), a...)
+	bc := append([]int(nil), b...)
+	sort.Ints(ac)
+	sort.Ints(bc)
+	for i := range ac {
+		if ac[i] != bc[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (s *icebergTableSchema) ToIceberg() (*iceberg.Schema, error) {

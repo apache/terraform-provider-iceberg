@@ -25,6 +25,7 @@ resource "iceberg_table" "example" {
   name      = "example_table"
 
   schema = {
+    identifier_fields = ["id"]
     fields = [
       {
         name     = "id"

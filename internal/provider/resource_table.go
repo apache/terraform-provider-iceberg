@@ -215,6 +215,11 @@ func (r *icebergTableResource) Create(ctx context.Context, req resource.CreateRe
 
 		return
 	}
+	if err := validateIdentifierFields(tblSchema); err != nil {
+		resp.Diagnostics.AddError("invalid identifier fields", err.Error())
+
+		return
+	}
 
 	userProps := make(map[string]string)
 	if !data.UserProperties.IsNull() && !data.UserProperties.IsUnknown() {
@@ -472,9 +477,18 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
+	// Keep identifier fields when the plan omits them so unrelated field
+	// changes do not silently clear row-identity metadata.
+	planSchema.preserveIdentifierFields(tbl.Schema())
+
 	planIceberg, err := planSchema.ToIceberg()
 	if err != nil {
 		diags.AddError("failed to convert plan schema", err.Error())
+
+		return nil
+	}
+	if err := validateIdentifierFields(planIceberg); err != nil {
+		diags.AddError("invalid identifier fields", err.Error())
 
 		return nil
 	}
@@ -485,13 +499,11 @@ func (r *icebergTableResource) calculateSchemaUpdates(ctx context.Context, plan,
 		return nil
 	}
 
-	// Normalize by comparing the JSON of the fields list only.
-	// This ignores the top-level schema-id and any other schema-level metadata
-	// while ensuring every field change (name, type, id, etc.) is detected.
+	// Compare fields and identifier-field-ids. Ignore top-level schema-id.
 	planFieldsJson, _ := json.Marshal(planIceberg.Fields())
 	stateFieldsJson, _ := json.Marshal(stateIceberg.Fields())
-
-	if string(planFieldsJson) == string(stateFieldsJson) {
+	if string(planFieldsJson) == string(stateFieldsJson) &&
+		identifierFieldIDsEqual(planIceberg.IdentifierFieldIDs, stateIceberg.IdentifierFieldIDs) {
 		return nil
 	}
 
