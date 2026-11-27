@@ -364,7 +364,7 @@ func TestValidateFieldIDParents(t *testing.T) {
 			wantErr: `field "x" (id 3): cannot move from parent id 1 ("a") to parent id 2 ("a")`,
 		},
 		{
-			name: "deep nested list-of-map-of-struct child stays",
+			name:    "deep nested list-of-map-of-struct child stays",
 			current: deepListMapStruct(6, 10),
 			planned: deepListMapStruct(6, 10),
 		},
