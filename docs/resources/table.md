@@ -93,8 +93,9 @@ resource "iceberg_table" "example" {
 
 When the attribute is omitted from a plan, the provider preserves the table's
 current identifiers (remapping by field ID across renames). An explicit empty
-set clears them. Dropping an identifier column without listing it again also
-removes it from the preserved set.
+set clears them. Dropping a column that is still a preserved identifier field
+fails with a validation error; set `identifier_fields = []` when you intend to
+drop the identifier and clear row identity.
 
 ## Renaming columns
 

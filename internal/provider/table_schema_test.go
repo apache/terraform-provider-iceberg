@@ -494,7 +494,7 @@ func TestPreserveIdentifierFields(t *testing.T) {
 		}
 	})
 
-	t.Run("dropped identifier column is not preserved", func(t *testing.T) {
+	t.Run("dropped identifier column errors on convert", func(t *testing.T) {
 		plan := icebergTableSchema{
 			IdentifierFields: types.SetNull(types.StringType),
 			Fields: []icebergTableSchemaField{
@@ -506,8 +506,12 @@ func TestPreserveIdentifierFields(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stringSetElements: %v", err)
 		}
-		if len(names) != 0 {
-			t.Fatalf("expected no preserved identifiers after drop, got %v", names)
+		if len(names) != 1 || names[0] != "id" {
+			t.Fatalf("expected preserved dropped identifier name [id], got %v", names)
+		}
+		_, err = plan.ToIceberg()
+		if err == nil || !strings.Contains(err.Error(), `identifier field "id" does not exist`) {
+			t.Fatalf("expected missing identifier field error, got %v", err)
 		}
 	})
 }
@@ -594,4 +598,3 @@ func TestIdentifierFieldIDsEqual(t *testing.T) {
 		t.Fatal("expected unequal lengths")
 	}
 }
-

@@ -196,7 +196,9 @@ func (s icebergTableSchema) resolveIdentifierFieldIDs() ([]int64, error) {
 
 // preserveIdentifierFields copies identifier fields from the current table when
 // the plan omits them (null/unknown). Current IDs are remapped to names in the
-// plan schema so renames keep identity; IDs for dropped columns are skipped.
+// plan schema so renames keep identity. Dropped columns keep the current table
+// name so ToIceberg/validateIdentifierFields reject the update instead of
+// silently clearing row identity.
 // An explicit empty set clears identifiers; a non-empty plan set is unchanged.
 func (s *icebergTableSchema) preserveIdentifierFields(current *iceberg.Schema) {
 	if !s.IdentifierFields.IsNull() && !s.IdentifierFields.IsUnknown() {
@@ -212,8 +214,11 @@ func (s *icebergTableSchema) preserveIdentifierFields(current *iceberg.Schema) {
 	for _, id := range current.IdentifierFieldIDs {
 		name, ok := namesByID[int64(id)]
 		if !ok {
-			// Identifier column was dropped; do not preserve a stale reference.
-			continue
+			colName, found := current.FindColumnName(id)
+			if !found {
+				continue
+			}
+			name = colName
 		}
 		elems = append(elems, types.StringValue(name))
 	}
